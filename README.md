@@ -1,96 +1,289 @@
 # Display Handoff
 
-A Windows utility for sharing an LG 45GX950A between an AMD desktop (DisplayPort) and a Windows laptop (USB-C). Includes a Japanese UI and one-click shortcuts.
+**1台のLG 45GX950Aを、ゲーム用PCと仕事用PCで切り替えて使うためのWindowsアプリです。**
 
-**Preview software:** automated tests and read-only display enumeration have passed. Physical switching, real window migration, and communication between two PCs have not yet been validated with this application.
+ゲーム用PCの「仕事用PCへ渡す」で、45インチ上のウィンドウをサブモニターへ移し、45インチを仕事用PCの画面に切り替える処理を行います。仕事用PCの「ゲーム用PCへ返す」で、ゲーム用PCの元の画面構成へ戻す処理を行います。
 
-## Features
+> **現在は試用版です。** 自動テストは通っていますが、このアプリによる実際のモニター切替・ウィンドウ移動・2台のPC間の通信は、まだ実機で確認していません。最初は下の「はじめての切替テスト」から試してください。
 
-- **Hand to work PC:** move ordinary visible windows to a selected secondary display, request USB-C input, then disable the desktop DisplayPort display path.
-- **Return to gaming PC:** the laptop sends an authenticated LAN request; the desktop restores its saved display configuration and requests DisplayPort input.
-- Keep secondary displays enabled and close the desktop gap left by the shared display.
-- Persist recovery data before changes and attempt rollback on failure.
-- Input-only test with a DisplayPort return request after approximately 15 seconds.
+[**アプリをダウンロードする**](https://github.com/nekosan365/display-handoff/releases/tag/v0.1.0)
 
-Monitor control runs on the AMD desktop; the laptop does not need an AMD GPU. The desktop must remain on, logged in, and running the tray application.
+## こんな使い方を想定しています
 
-## Requirements and download
+- 大きなモニターを、ゲーム用と仕事用の2台のPCで使いたい。
+- 仕事用PCに切り替えた後も、ゲーム用PCはサブモニターで使い続けたい。
+- ゲーム用PCのウィンドウが、映らなくなった45インチ側に残るのを避けたい。
 
-Windows 10/11 x64, .NET Framework 4.8, an AMD desktop graphics driver providing `atiadlxx.dll`, an LG 45GX950A connected over DP/USB-C, at least one secondary desktop display, and LAN connectivity on TCP 45845 (configurable).
+この説明では、デスクトップを「ゲーム用PC」、ノートを「仕事用PC」と呼びます。ゲームや仕事以外の用途でも、対応する機器構成であれば同じ操作です。
 
-Download the ZIP from [Releases](https://github.com/nekosan365/display-handoff/releases), extract it into a fixed folder on each PC, and run `DisplayHandoff.exe`. No SDK or Python is needed to run it. The executable is unsigned. Other monitors and non-AMD desktop GPUs are not supported.
+### 接続の例
 
-## セットアップ
+```text
+ゲーム用PC（Windows・AMD製GPU）
+  ├─ DisplayPort ── 45インチ：LG 45GX950A
+  ├─ HDMI ───────── 左のサブモニター
+  └─ HDMI ───────── 右のサブモニター
 
-### ゲーム用PC
+仕事用PC（Windowsノート）
+  └─ USB-C ──────── 同じ45インチ：LG 45GX950A
 
-1. アプリを起動し、「このPC」を「ゲーム用PC」にします。
-2. 「45インチの画面」と「LGの入力切替先」が同じモニターを指していることを確認します。
-3. 「27インチの退避先」を選びます。45インチの左側にある画面を初期選択しますが、別の画面も選べます。
-4. 「ゲーム用PCのIP / 名前」に、ノートからアクセスできるデスクトップのIPアドレスまたはホスト名を入力し、「設定を保存」を押します。
-5. 「ペアリングを書出し」で `.handoff` ファイルを作成し、ノートへ転送します。
-6. 「ショートカット作成」で「仕事用PCへ渡す」を作成します。
-
-×ボタンではタスクトレイに移ります。「ログイン時に起動」は任意です。解除する場合はWindowsの `shell:startup` フォルダーから `Display Handoff.lnk` を削除します。EXEの場所を変えたらショートカットを作り直してください。
-
-### 仕事用PC
-
-1. アプリを起動し、「ペアリングを読込」で転送したファイルを開きます。仕事用PCとして自動設定されます。
-2. 「接続を確認」でゲーム用PCの状態が表示されることを確認します。
-3. 「ショートカット作成」で「ゲーム用PCへ返す」を作成します。
-4. ペアリングファイルは認証キーを含むため、読み込み後に転送用ファイルを削除します。リポジトリやIssueには添付しないでください。
-
-### ファイアウォール
-
-接続できない場合はゲーム用PCの常駐アプリ、LAN接続、VPNやネットワーク分離を確認します。受信が遮断される場合はゲーム用PCの管理者PowerShellでアプリフォルダーへ移動し、実際の仕事用PCのIPv4アドレスを指定します。
-
-```powershell
-.\Allow-WorkPC.ps1 -WorkPcIPv4 '<WORK_PC_IPV4>'
+2台のPCは、同じ家庭内ネットワークに接続
+（同じルーターのWi-Fiまたは有線LAN）
 ```
 
-指定した接続元IP・このEXE・設定ポートだけを許可します。ネットワーク種別は限定しません。スクリプトは自動実行されません。IPやEXEの場所を変更した場合は再実行してください。
+サブモニターは最低1台必要です。2台ある場合は、両方ともゲーム用PCで使い続けられます。ウィンドウを移す先はアプリで選べます。
 
-## 初回の実機テスト
+### ボタンを押すと何が起きる？
 
-1. ノートをUSB-Cで45GX950Aに接続し起動します。モニターにDDC/CI設定があれば有効にします。
-2. ノートで「接続を確認」を成功させます。
-3. ゲーム用PCで「入力を15秒テスト」を実行し、ノートの画面が映ってからDisplayPortへ戻ることを目視します。Windowsの出力は無効にしません。
-4. 45インチにメモ帳などを置き、「仕事用PCへ渡す」でウィンドウ退避、45インチの非アクティブ化、残る画面の動作を確認します。
-5. ノートで「ゲーム用PCへ返す」を押し、DisplayPortと元の画面配置へ戻ることを確認します。
+| 押すPCとボタン | アプリが行う処理 |
+|---|---|
+| ゲーム用PCで「仕事用PCへ渡す」 | ウィンドウを指定のサブモニターへ移す → USB-Cへの切替を要求する → ゲーム用PCの45インチ出力を無効にする |
+| 仕事用PCで「ゲーム用PCへ返す」 | ゲーム用PCへネットワークで連絡する → 保存した画面構成を復元する → DisplayPortへの切替を要求する |
 
-「切替要求を送信」はAMD APIが要求を受理したことを意味します。現在のモニター入力を読み取る機能はありません。15秒テストもアプリやOSが停止すると自動復帰できません。
+「出力を無効にする」とは、ゲーム用PCから45インチへデスクトップを表示しない状態にすることです。モニターの電源を切ることではありません。
 
-## Recovery and limitations
+## 使える環境
 
-- Use **元の画面構成へ復旧** on the desktop if LAN access fails. Recovery data survives an app restart and is retained when restoration fails.
-- If needed, use the monitor's physical controls to select DisplayPort and Windows Display Settings to re-enable extended display mode.
-- Window migration is best effort. Minimized, elevated, or exclusive-fullscreen windows may not move. Exact per-application window positions are not restored on return.
-- Secondary displays are arranged in a horizontal row during handoff; their saved modes and positions are restored on return.
-- Driver updates and cable changes can invalidate display identities. Recover through Windows and reconfigure the app if identities change.
-- No wake-on-LAN, Windows service, ARM Windows, or DisplayLink support.
+| 必要なもの | 条件 |
+|---|---|
+| 共用するモニター | **LG 45GX950A**。他の機種には対応していません |
+| ゲーム用PC | **AMD製GPU**を搭載したWindowsデスクトップ。AMDのグラフィックスドライバーが必要です |
+| 仕事用PC | Windowsノート。こちらのGPUはAMD製でなくても構いません |
+| Windows | 両PCともWindows 10 / 11のx64版。ARM版には対応していません |
+| 実行環境 | .NET Framework 4.8 |
+| 映像ケーブル | ゲーム用PCからDisplayPort、仕事用PCから映像出力できるUSB-Cで45インチに接続 |
+| サブモニター | ゲーム用PCに最低1台接続 |
+| ネットワーク | 仕事用PCからゲーム用PCへ通信できること |
 
-## Data and protocol
+**返す操作を使う間も、ゲーム用PCは電源を入れ、Windowsにログインし、アプリを起動しておく必要があります。** スリープ中のPCを起こす機能はありません。
 
-Settings, logs, and recovery data live in `%LOCALAPPDATA%\DisplayHandoff`. The key is protected locally using current-user Windows DPAPI. Exported pairing files contain the key in plaintext for transfer.
+会社のPCでアプリの実行や家庭内ネットワークへの通信が制限されている場合、その環境では使えないことがあります。
 
-The TCP protocol uses a fresh server challenge and HMAC-SHA256 authentication for requests and responses. Only status and return operations are accepted remotely; no shell commands are accepted. Traffic is authenticated but not encrypted. Use a trusted LAN and a restricted firewall rule. One connection is served at a time; this is not an Internet-facing service.
+## 1. アプリをダウンロードする【両方のPC】
 
-## Build and test
+1. [ダウンロードページ](https://github.com/nekosan365/display-handoff/releases/tag/v0.1.0)を開きます。
+2. ページの **Assets** を開き、`DisplayHandoff-v0.1.0-Windows-x64.zip` をダウンロードします。
+3. ZIPファイルを右クリックし、**「すべて展開」**で展開します。
+4. 展開したフォルダー内の `DisplayHandoff.exe` をダブルクリックします。
 
-Run in Windows PowerShell:
+`Source code (zip)` は開発用のソースです。普通に使う場合は、名前に **Windows-x64** が入ったZIPを選んでください。
+
+プログラミングの知識、Python、開発用ツールのインストールは不要です。アプリは未署名のため、Windowsに警告が表示される場合があります。起動できない場合は、後半の「困ったとき」を確認してください。
+
+フォルダーは後から移動しなくてよい場所に置きます。移動した場合はショートカットを作り直す必要があります。
+
+## 2. モニターと移動先を設定する【ゲーム用PC】
+
+アプリを開き、次の項目を設定します。
+
+| 画面の項目 | 選ぶ内容 |
+|---|---|
+| このPC | 「ゲーム用PC（デスクトップ）」 |
+| 45インチの画面 | 45GX950Aに対応する画面。`LG ULTRAGEAR+` と表示される場合があります |
+| 27インチの退避先 | ウィンドウを移したいサブモニター |
+| LGの入力切替先 | 上で選んだ45インチと同じLGモニター |
+| ゲーム用PCのIP / 名前 | 仕事用PCから接続するためのゲーム用PCのアドレス。調べ方は下にあります |
+| 接続ポート | 最初は **45845** のままにします |
+
+「退避」とは、ウィンドウを別のモニターへ移動することです。左側にサブモニターがある場合は初期選択しますが、意図した画面か確認してください。
+
+選択が終わったら **「設定を保存」** を押します。
+
+### IPアドレスの調べ方
+
+IPアドレスは、同じネットワークの中でPCを見つけるための住所のような番号です。
+
+1. **ゲーム用PC**で、`Windows` キーと `R` キーを同時に押します。
+2. `cmd` と入力してEnterを押します。
+3. 開いた画面で `ipconfig` と入力してEnterを押します。
+4. 今使っている **Wi-Fi** または **イーサネット** の項目にある **IPv4 アドレス**を探します。
+5. その番号を、アプリの「ゲーム用PCのIP / 名前」に入力します。
+
+VPNなどを使っていると複数のアドレスが出る場合があります。家庭のルーターにつながっている接続の値を使ってください。
+
+## 3. 2台のPCを登録する【ゲーム用PC → 仕事用PC】
+
+この登録をアプリでは「ペアリング」と呼びます。
+
+### ゲーム用PCで行うこと
+
+1. **「ペアリングを書出し」**を押します。
+2. ファイルを保存します。ファイル名の末尾は `.handoff` です。
+3. USBメモリーなどで、そのファイルを仕事用PCへコピーします。
+
+### 仕事用PCで行うこと
+
+1. `DisplayHandoff.exe` を開きます。
+2. **「ペアリングを読込」**を押し、コピーした `.handoff` ファイルを選びます。
+3. 「このPC」が仕事用PCに切り替わったことを確認します。
+4. **「接続を確認」**を押します。
+5. 画面下の記録欄にゲーム用PCの状態が表示されれば、通信できています。
+
+このファイルには、2台を登録するための認証キーが入っています。読み込み後は転送用のファイルを削除し、GitHubや問い合わせには添付しないでください。アプリ側では登録情報を保存しています。
+
+接続に失敗する場合は、まだ切替を行わず「困ったとき」の通信確認へ進んでください。
+
+## 4. はじめての切替テスト
+
+最初はメモ帳などの通常のウィンドウで試してください。
+
+### まずは15秒の入力テスト
+
+1. 仕事用PCを起動し、USB-Cで45インチにつなぎます。
+2. ゲーム用PCのアプリで **「入力を15秒テスト」**を押します。
+3. 45インチに仕事用PCの画面が映るか確認します。
+4. 約15秒後、ゲーム用PCの画面へ戻るか確認します。
+
+このテストでは、ゲーム用PCの45インチ出力は無効にしません。モニターの入力切替だけを試します。アプリやWindowsが止まると自動で戻せないため、その場合はモニター本体の操作でDisplayPortを選んでください。
+
+### 次に、渡す・返す操作をテスト
+
+1. ゲーム用PCの45インチにメモ帳を開きます。
+2. ゲーム用PCの **「仕事用PCへ渡す」**を押します。
+3. 45インチに仕事用PCの画面が映り、メモ帳が選んだサブモニターへ移り、残りのサブモニターも使えることを確認します。
+4. 仕事用PCの **「ゲーム用PCへ返す」**を押します。
+5. 45インチがゲーム用PCの画面に戻り、元のモニター配置へ戻るか確認します。
+
+画面下に「切替要求を送信」と出ても、実際に映像が変わったことまではアプリで確認できません。目で見て確認してください。
+
+## 5. 普段はショートカットから操作する
+
+テストができたら、**それぞれのPC**で「ショートカット作成」を押します。
+
+| PC | デスクトップに作られるショートカット |
+|---|---|
+| ゲーム用PC | **仕事用PCへ渡す** |
+| 仕事用PC | **ゲーム用PCへ返す** |
+
+以後は、このショートカットをダブルクリックして操作できます。
+
+ゲーム用PCのアプリは、右上の×を押すと画面右下の通知領域に入ります。見つからない場合は、時計の近くの「隠れているインジケーター」を開いてください。アイコンをダブルクリックするとアプリが再表示されます。
+
+**「ログイン時に起動」**を押すと、Windowsへのログイン時に自動起動できます。特にゲーム用PCでは、返却を受け付けるために起動しておく必要があります。
+
+## 困ったとき
+
+### 「接続を確認」で失敗する
+
+次の順に確認してください。
+
+1. ゲーム用PCが起動していて、Windowsにログインしている。
+2. ゲーム用PCのアプリで設定を保存していて、アプリが起動したままになっている。
+3. 両PCが同じルーターにつながっている。ゲスト用Wi-Fiなど、PC同士の通信を分ける接続を使っていない。
+4. 仕事用PCの「ゲーム用PCのIP / 名前」が、現在のゲーム用PCのIPv4アドレスと一致している。
+5. 両PCの「接続ポート」が一致している。
+
+PCやルーターの再起動などでIPアドレスが変わる場合があります。変わったらアプリの接続先を更新して設定を保存してください。
+
+それでも接続できない場合は、Windowsのファイアウォールが通信を止めている可能性があります。必要な場合だけ、以下の手順で仕事用PCからの接続を許可します。
+
+<details>
+<summary>ファイアウォールの設定手順を開く</summary>
+
+ファイアウォールは、PCへの通信を許可・遮断するWindowsの機能です。付属スクリプトでは、指定した仕事用PCから、このアプリの接続ポートへの通信だけを許可します。
+
+1. **仕事用PC**で `ipconfig` を使い、仕事用PC自身のIPv4アドレスを控えます。
+2. **ゲーム用PC**でアプリフォルダーを開き、エクスプローラーのアドレス欄からフォルダーの場所をコピーします。
+3. ゲーム用PCのスタートメニューで `Windows PowerShell` を検索し、「管理者として実行」で開きます。
+4. 次の引用符内をコピーしたフォルダーの場所に置き換え、実行します。
+
+```powershell
+Set-Location -LiteralPath 'アプリを展開したフォルダーの場所'
+```
+
+5. 次の引用符内を、控えた**仕事用PC**のIPv4アドレスに置き換え、実行します。
+
+```powershell
+.\Allow-WorkPC.ps1 -WorkPcIPv4 '仕事用PCのIPv4アドレス'
+```
+
+6. 仕事用PCで、もう一度「接続を確認」を押します。
+
+この操作は自動実行されません。指定した接続元IP・このEXE・設定したポートに限定して許可します。ネットワーク種別は限定しません。仕事用PCのIPやEXEの場所を変えた場合は再実行してください。組織の設定などでスクリプトを実行できない場合は、管理者に確認してください。
+
+追加したルールを削除する場合は、ゲーム用PCの管理者PowerShellで実行します。
+
+```powershell
+Remove-NetFirewallRule -Name 'DisplayHandoff-Return'
+```
+
+</details>
+
+### 45インチの画面が戻らない
+
+1. ゲーム用PCのサブモニターからアプリを開き、**「元の画面構成へ復旧」**を押します。
+2. 戻らなければ、モニター本体のボタンで入力を **DisplayPort** に切り替えます。
+3. 必要に応じてWindowsの「設定」→「システム」→「ディスプレイ」で、45インチを含む拡張表示に戻します。
+
+復旧用の情報はアプリを再起動しても残ります。復旧に失敗した場合も保持するので、復旧ボタンから再試行できます。
+
+### モニターの入力が切り替わらない
+
+- 機種が45GX950Aで、ゲーム用PCのGPUがAMD製か確認します。
+- ノートのUSB-C接続だけで映像を出せるか、モニター本体の入力切替で確認します。
+- モニターにDDC/CIの設定があれば有効にします。DDC/CIはPCからモニターを操作するための機能です。
+- 配線変更やドライバー更新の後は、まずWindows側で画面を復旧し、「モニター再検出」から選び直して設定を保存します。
+
+### アプリが起動しない
+
+ZIP内から直接実行していないか、Windowsがx64版か、.NET Framework 4.8が利用できるかを確認します。Windowsや会社の管理機能によって実行を制限されている場合もあります。問い合わせには、表示されたエラー文とWindowsの種類を記載してください。
+
+### 自動起動をやめたい・アプリを削除したい
+
+1. 貸出中なら、先に元の画面構成へ復旧します。
+2. 通知領域のアプリアイコンを右クリックし、「終了」を選びます。
+3. 自動起動を設定した場合は `Windows` + `R` で `shell:startup` を開き、`Display Handoff.lnk` を削除します。
+4. 不要なデスクトップショートカットと、展開したアプリフォルダーを削除します。
+
+設定も消したい場合は、`Windows` + `R` で `%LOCALAPPDATA%\DisplayHandoff` を開いて削除します。ファイアウォールのルールを追加していた場合は、上の削除コマンドで取り除けます。
+
+## 現在できないこと・制限
+
+- 最小化したウィンドウ、管理者として開いたウィンドウ、一部の全画面ゲームなどは移動できない場合があります。
+- 戻す際に復元するのは、モニターの配置・解像度・向きなどの画面構成です。**各アプリのウィンドウを元の位置へ厳密に戻す機能はありません。**
+- 貸出中は残るサブモニターを横一列に並べた構成にします。返すと保存した配置へ戻します。
+- スリープからの起動、Windowsへの未ログイン状態での動作、ARM版Windows、DisplayLinkには対応していません。
+- LG・AMDの公式アプリではありません。
+
+## 不具合を報告する
+
+[Issues](https://github.com/nekosan365/display-handoff/issues)から報告できます。モニターの型番、ゲーム用PCのGPU、Windowsの種類、押したボタン、表示されたエラーを書くと原因を調べやすくなります。
+
+ペアリングファイル、認証キー、PC名やIPアドレスなどの個人の環境情報は添付しないでください。
+
+## 開発者向けの情報
+
+通常の利用では、ここから先の作業は不要です。
+
+<details>
+<summary>仕組み・保存場所・ビルドとテスト</summary>
+
+### 仕組みとデータ
+
+ゲーム用PCのAMD ADLから、LG向けの入力切替命令を送ります。必要な `atiadlxx.dll` はインストール済みのAMDドライバーから読み込みます。SDKのヘッダーやドライバー本体は配布しません。
+
+設定・操作ログ・復旧情報は `%LOCALAPPDATA%\DisplayHandoff` に保存します。共有キーはWindowsのユーザー単位のDPAPIで保護します。転送用に書き出すペアリングファイルには平文で含まれます。
+
+PC間の通信は、接続ごとのチャレンジとHMAC-SHA256で要求・応答を認証します。受け付ける遠隔操作は状態確認と返却だけで、シェルコマンドは受け付けません。通信自体は暗号化していません。信頼できるLAN内で接続元を制限して使う設計で、インターネットへのポート公開は想定していません。接続は1つずつ処理します。
+
+### ビルドとテスト
+
+ソースをダウンロードし、そのフォルダーでWindows PowerShellを開いて実行します。
 
 ```powershell
 .\build.ps1
 $test = Start-Process .\DisplayHandoff.exe -ArgumentList '--self-test test-results.txt' -Wait -PassThru
 Get-Content .\test-results.txt
-if ($test.ExitCode -ne 0) { throw 'Tests failed' }
+if ($test.ExitCode -ne 0) { throw 'テストに失敗しました' }
 ```
 
-Tests cover transitions, duplicate requests, rollback, persisted recovery, display layout planning, packet checksums, DPAPI storage, authenticated loopback, and replay rejection. They do not change physical displays. GitHub Actions builds and tests on Windows.
+自動テストでは、切替順序、二重実行、失敗時の復旧、復旧情報の保持、画面配置、入力命令のチェックサム、認証情報の保存、同一PC内での認証付き通信、不正な再送の拒否を確認します。物理モニターは操作しません。GitHub ActionsでもWindows上でビルドとテストを実行します。
 
-## License and references
+</details>
 
-MIT. See [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). No AMD SDK headers or driver binaries are redistributed. This is not an official LG or AMD product.
+## ライセンス・参考にしたプロジェクト
 
-- [LGInputSwitch](https://github.com/phillip9933/LGInputSwitch): reference AMD/LG input-switching implementation.
-- [ChangeDisplaySettingsExW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-changedisplaysettingsexw) and [DEVMODEW](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-devmodew): Windows display APIs.
+MITライセンスで公開しています。詳細は [LICENSE](LICENSE) と [第三者の帰属表示](THIRD-PARTY-NOTICES.txt)を参照してください。
+
+- [LGInputSwitch](https://github.com/phillip9933/LGInputSwitch)：AMD・LG環境での入力切替方式を参考にしました。
+- Microsoftの [ChangeDisplaySettingsExW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-changedisplaysettingsexw) と [DEVMODEW](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-devmodew)：Windowsの画面構成変更に使っています。
