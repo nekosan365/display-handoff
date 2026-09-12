@@ -1,0 +1,15 @@
+*.exe
+*.zip
+*.handoff
+*.log
+settings.json
+restore.json
+*.tmp
+test-results.txt
+test-state-*/
+preview-state/
+app-preview.png
+bin/
+obj/
+dist/
+.vs/

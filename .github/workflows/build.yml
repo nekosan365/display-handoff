@@ -1,0 +1,28 @@
+name: Windows build and tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build
+        shell: powershell
+        run: .\build.ps1
+      - name: Test without changing physical displays
+        shell: powershell
+        run: |
+          $process = Start-Process .\DisplayHandoff.exe -ArgumentList '--self-test test-results.txt' -Wait -PassThru
+          Get-Content .\test-results.txt
+          if ($process.ExitCode -ne 0) { throw 'Self-tests failed' }
+      - name: Package
+        shell: powershell
+        run: Compress-Archive -Path DisplayHandoff.exe,README.md,LICENSE,THIRD-PARTY-NOTICES.txt,Allow-WorkPC.ps1,test-results.txt -DestinationPath DisplayHandoff-Windows-x64.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: DisplayHandoff-Windows-x64
+          path: DisplayHandoff-Windows-x64.zip
