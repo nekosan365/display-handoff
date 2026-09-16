@@ -38,26 +38,39 @@ public static class Displays {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowTextLength(IntPtr window);
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int L,T,R,B; }
     public static void Put(byte[] bytes, int offset, int value) { Buffer.BlockCopy(BitConverter.GetBytes(value),0,bytes,offset,4); }
-    public static List<MonitorInfo> List() {
+    public static List<MonitorInfo> List(bool includeInactive=false) {
         var result = new List<MonitorInfo>();
         for (uint i=0;;i++) {
             var d = new DeviceInfo(); d.cb=Marshal.SizeOf(d);
             if (!EnumDisplayDevices(null,i,ref d,0)) break;
-            if ((d.Flags & 1)==0 || (d.Flags & 8)!=0) continue;
+            if ((!includeInactive && (d.Flags & 1)==0) || (d.Flags & 8)!=0) continue;
             byte[] mode = new byte[220]; mode[68]=220;
-            if (!EnumDisplaySettings(d.Name,-1,mode)) continue;
+            if (!EnumDisplaySettings(d.Name,-1,mode) && (!includeInactive || !EnumDisplaySettings(d.Name,-2,mode))) continue;
             var child = new DeviceInfo(); child.cb=Marshal.SizeOf(child);
             EnumDisplayDevices(d.Name,0,ref child,0);
             result.Add(new MonitorInfo { Device=d.Name, Identity=child.Id, Name=child.Description ?? d.Description, Primary=(d.Flags & 4)!=0, Mode=mode });
         }
         return result;
     }
-    public static void ValidateIdentity(IEnumerable<MonitorInfo> saved) {
+    public static List<MonitorInfo> ResolveSaved(IEnumerable<MonitorInfo> saved, List<MonitorInfo> current) {
+        var result=new List<MonitorInfo>();
         foreach(var item in saved) {
-            var child=new DeviceInfo(); child.cb=Marshal.SizeOf(child);
-            if(!EnumDisplayDevices(item.Device,0,ref child,0) || child.Id!=item.Identity)
-                throw new Exception("モニターの接続が変わりました。Windows のディスプレイ設定で復旧してください: " + item.Device);
+            var matches=current.Where(m=>!string.IsNullOrEmpty(item.Identity) && m.Identity==item.Identity).ToList();
+            if(matches.Count!=1 || result.Any(m=>m.Identity==item.Identity))
+                throw new Exception("保存したモニターを一意に識別できません。配線を確認してください: " + item.Name);
+            result.Add(new MonitorInfo {Device=matches[0].Device,Identity=item.Identity,Name=item.Name,Primary=item.Primary,Mode=(byte[])item.Mode.Clone()});
         }
+        return result;
+    }
+    public static bool Matches(List<MonitorInfo> saved,List<MonitorInfo> current) {
+        if(saved.Count!=current.Count)return false;
+        foreach(var m in saved) {
+            var found=current.Where(a=>!string.IsNullOrEmpty(m.Identity) && a.Identity==m.Identity).ToList();
+            if(found.Count!=1 || found[0].Bounds!=m.Bounds || found[0].Primary!=m.Primary)return false;
+            // Orientation, depth and refresh rate are part of the saved display mode.
+            foreach(int offset in new[]{84,168,184})if(BitConverter.ToInt32(found[0].Mode,offset)!=BitConverter.ToInt32(m.Mode,offset))return false;
+        }
+        return true;
     }
     static void Stage(MonitorInfo item, byte[] mode, bool primary) {
         int rc=ChangeDisplaySettingsEx(item.Device,mode,IntPtr.Zero,0x10000001u | (primary?0x10u:0u),IntPtr.Zero);
@@ -65,12 +78,13 @@ public static class Displays {
     }
     static void Commit() { int rc=ChangeDisplaySettingsEx(null,null,IntPtr.Zero,0,IntPtr.Zero); if(rc!=0) throw new Exception("画面構成の適用に失敗: " + rc); }
     public static void Restore(List<MonitorInfo> saved) {
-        ValidateIdentity(saved);
-        foreach(var m in saved.OrderByDescending(m=>m.Primary)) Stage(m,(byte[])m.Mode.Clone(),m.Primary);
+        var mapped=ResolveSaved(saved,List(true));
+        if(Matches(mapped,List()))return;
+        foreach(var m in mapped.OrderByDescending(m=>m.Primary)) Stage(m,(byte[])m.Mode.Clone(),m.Primary);
         Commit();
         Thread.Sleep(800);
         var active=List();
-        foreach(var m in saved) if(!active.Any(a=>a.Device==m.Device && a.Bounds==m.Bounds && a.Primary==m.Primary)) throw new Exception("元の画面構成への復帰を確認できません。復旧ボタンを再実行してください。");
+        if(!Matches(mapped,active))throw new Exception("元の画面構成への復帰を確認できません。復旧ボタンを再実行してください。");
     }
     public static List<MonitorInfo> DetachedLayout(List<MonitorInfo> saved, string target, string fallback) {
         var keep=saved.Single(m=>m.Device==fallback);
@@ -91,9 +105,12 @@ public static class Displays {
         return plan;
     }
     public static void Detach(List<MonitorInfo> saved, string target, string fallback) {
-        foreach(var m in DetachedLayout(saved,target,fallback).OrderByDescending(m=>m.Primary))Stage(m,m.Mode,m.Primary);
+        string targetId=saved.Single(m=>m.Device==target).Identity;
+        string fallbackId=saved.Single(m=>m.Device==fallback).Identity;
+        var mapped=ResolveSaved(saved,List(true));
+        foreach(var m in DetachedLayout(mapped,mapped.Single(a=>a.Identity==targetId).Device,mapped.Single(a=>a.Identity==fallbackId).Device).OrderByDescending(m=>m.Primary))Stage(m,m.Mode,m.Primary);
         Commit(); Thread.Sleep(700);
-        if(List().Any(m=>m.Device==target)) throw new Exception("45インチ出力の無効化を確認できません。");
+        if(List().Any(m=>m.Identity==targetId)) throw new Exception("45インチ出力の無効化を確認できません。");
     }
     public static int MoveWindows(MonitorInfo target, MonitorInfo fallback) {
         int count=0;
@@ -119,7 +136,7 @@ public static class Displays {
 }
 public class AdlTarget {
     public int Adapter, Display;
-    public string Name, Device;
+    public string Name, Device, Identity;
     public override string ToString() { return Name+"  (AMD "+Adapter+" / "+Display+")"; }
 }
 public sealed class Amd : IDisposable {
@@ -152,7 +169,7 @@ public sealed class Amd : IDisposable {
     public Amd() { if(ADL_Main_Control_Create(allocator,1)!=0) throw new Exception("AMD ADL を初期化できません。"); }
     public List<AdlTarget> List() {
         int count; if(ADL_Adapter_NumberOfAdapters_Get(out count)!=0 || count<0 || count>128) throw new Exception("AMD GPU の列挙に失敗しました。");
-        var result=new List<AdlTarget>(); int size=Marshal.SizeOf(typeof(AdapterInfo));
+        var result=new List<AdlTarget>(); var monitors=Displays.List(true); int size=Marshal.SizeOf(typeof(AdapterInfo));
         IntPtr p=Marshal.AllocHGlobal(size*count);
         try {
             for(int i=0;i<size*count;i++) Marshal.WriteByte(p,i,0);
@@ -166,7 +183,8 @@ public sealed class Amd : IDisposable {
                     for(int j=0;j<n;j++) {
                         var d=(DisplayInfo)Marshal.PtrToStructure(IntPtr.Add(dp,j*Marshal.SizeOf(typeof(DisplayInfo))),typeof(DisplayInfo));
                         if(d.LogicalAdapter!=a.Index || (d.Value&1)==0) continue;
-                        if(!result.Any(t=>t.Adapter==a.Index && t.Display==d.Logical)) result.Add(new AdlTarget {Adapter=a.Index,Display=d.Logical,Name=d.Name,Device=a.Display});
+                        var monitor=monitors.SingleOrDefault(m=>m.Device==a.Display);
+                        if(!result.Any(t=>t.Adapter==a.Index && t.Display==d.Logical)) result.Add(new AdlTarget {Adapter=a.Index,Display=d.Logical,Name=d.Name,Device=a.Display,Identity=monitor==null?null:monitor.Identity});
                     }
                 } finally { if(dp!=IntPtr.Zero) Marshal.FreeHGlobal(dp); }
             }
@@ -178,11 +196,18 @@ public sealed class Amd : IDisposable {
         for(int i=0;i<7;i++) bytes[7]^=bytes[i];
         return bytes;
     }
+    public static AdlTarget ResolveTarget(AdlTarget target,List<AdlTarget> current) {
+        if(target==null)throw new Exception("LGの入力切替先を選択してください。");
+        // Adapter indices and DISPLAY numbers are session-local, not physical identities.
+        // Legacy v0.1.0 records have no identity: migrate only an unambiguous monitor name.
+        var matches=current.Where(t=>!string.IsNullOrEmpty(target.Identity)?t.Identity==target.Identity:t.Name==target.Name).ToList();
+        if(matches.Count!=1 || string.IsNullOrEmpty(matches[0].Identity))throw new Exception("保存したLGモニターを一意に識別できません。接続を確認し、モニター再検出で選び直してください。");
+        return matches[0];
+    }
     public void Switch(AdlTarget target, byte input) {
-        var current=List().SingleOrDefault(t=>t.Adapter==target.Adapter && t.Display==target.Display && t.Name==target.Name && t.Device==target.Device);
-        if(current==null) throw new Exception("AMD のモニター識別が変わりました。設定で再選択してください。");
+        var current=ResolveTarget(target,List());
         int read=0; var packet=Packet(input);
-        int rc=ADL_Display_DDCBlockAccess_Get(target.Adapter,target.Display,0,0,packet.Length,packet,ref read,IntPtr.Zero);
+        int rc=ADL_Display_DDCBlockAccess_Get(current.Adapter,current.Display,0,0,packet.Length,packet,ref read,IntPtr.Zero);
         if(rc!=0) throw new Exception("LG入力切替コマンドが失敗しました: AMD "+rc);
         Thread.Sleep(900);
     }

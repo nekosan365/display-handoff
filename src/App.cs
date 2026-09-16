@@ -37,7 +37,7 @@ static class Program {
                 using(var amd=new Amd())lg=amd.List().Single(t=>t.Name.IndexOf("LG",StringComparison.OrdinalIgnoreCase)>=0);
                 var target=displays.Single(m=>m.Device==lg.Device);
                 var fallback=displays.Where(m=>m.Device!=lg.Device && m.Bounds.Right<=target.Bounds.Left).OrderByDescending(m=>m.Bounds.Right).First();
-                config.Role="game";config.Target=target.Device;config.Fallback=fallback.Device;config.AmdTarget=lg;config.Host=args.Last();Files.Save("settings.json",config);
+                config.Role="game";config.Target=target.Device;config.Fallback=fallback.Device;config.TargetIdentity=target.Identity;config.FallbackIdentity=fallback.Identity;config.AmdTarget=lg;config.Host=args.Last();Files.Save("settings.json",config);
                 return 0;
             } catch(Exception e){Files.Log(e.ToString());return 1;}
         }
@@ -52,7 +52,21 @@ static class Program {
             ShowEvent=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\DisplayHandoff-Show-"+suffix);
             GiveEvent=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\DisplayHandoff-Give-"+suffix);
             ReturnEvent=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\DisplayHandoff-Return-"+suffix);
-            if(!created) {if(args.Contains("--give"))GiveEvent.Set();else if(args.Contains("--return"))ReturnEvent.Set();else ShowEvent.Set();return 0;}
+            if(!created) {if(args.Contains("--repair-game-left")){File.WriteAllText(args.Last(),"アプリを終了してから修復してください。");return 2;}if(args.Contains("--give"))GiveEvent.Set();else if(args.Contains("--return"))ReturnEvent.Set();else ShowEvent.Set();return 0;}
+            if(args.Contains("--repair-game-left")) {
+                try {
+                    var config=Files.Load();if(config.Role!="game")throw new Exception("ゲーム用PCで実行してください。");
+                    var hardware=new Hardware();var controller=new Controller(config,hardware);
+                    var message=controller.Restore();
+                    var resolved=hardware.ResolveTarget(config.AmdTarget);var monitors=hardware.Snapshot();
+                    var shared=monitors.Single(m=>m.Identity==resolved.Identity);
+                    var left=monitors.Where(m=>m.Identity!=shared.Identity && m.Bounds.Right<=shared.Bounds.Left).OrderByDescending(m=>m.Bounds.Right).First();
+                    config.Target=shared.Device;config.Fallback=left.Device;config.TargetIdentity=shared.Identity;config.FallbackIdentity=left.Identity;config.AmdTarget=resolved;
+                    Files.Save("settings.json",config);
+                    File.WriteAllText(args.Last(),Files.Json.Serialize(new {Result=message,Target=shared.Device,Fallback=left.Device,Amd=resolved,Pending=controller.Pending}),System.Text.Encoding.UTF8);
+                    return 0;
+                }catch(Exception e){Files.Log(e.ToString());File.WriteAllText(args.Last(),e.ToString());return 1;}
+            }
             try {Application.Run(new MainForm(args));}
             catch(Exception e) {Files.Log(e.ToString());MessageBox.Show(e.Message,"Display Handoff",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1;}
         }
@@ -72,7 +86,7 @@ public class MainForm : Form {
     bool busy,exit;
     public MainForm(string[] args) {
         config=Files.Load(); controller=new Controller(config,new Hardware());
-        Text="Display Handoff • 45GX950A"; Font=new Font("Yu Gothic UI",10); BackColor=Color.FromArgb(245,247,251);
+        Text="Display Handoff 0.1.1 • 45GX950A"; Font=new Font("Yu Gothic UI",10); BackColor=Color.FromArgb(245,247,251);
         ClientSize=new Size(820,930); MinimumSize=new Size(800,920); StartPosition=FormStartPosition.CenterScreen;
         var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(28),ColumnCount=1,RowCount=8};
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));
@@ -120,15 +134,17 @@ public class MainForm : Form {
         var monitors=Displays.List();target.Items.Clear();fallback.Items.Clear();amd.Items.Clear();
         foreach(var m in monitors){target.Items.Add(m);fallback.Items.Add(m);}
         try {using(var a=new Amd()) foreach(var t in a.List()){amd.Items.Add(t);foreach(var m in monitors.Where(m=>m.Device==t.Device))m.Name=t.Name;}}catch(Exception e){Append("AMD検出: "+e.Message);}
-        var preferred=amd.Items.Cast<AdlTarget>().FirstOrDefault(a=>a.Name.IndexOf("LG",StringComparison.OrdinalIgnoreCase)>=0);
-        foreach(MonitorInfo m in target.Items)if(m.Device==config.Target || (config.Target=="" && preferred!=null && m.Device==preferred.Device))target.SelectedItem=m;
-        foreach(MonitorInfo m in fallback.Items)if(m.Device==config.Fallback)fallback.SelectedItem=m;
-        if(fallback.SelectedIndex<0 && config.Fallback=="" && target.SelectedItem!=null) {
+        AdlTarget preferred=null;
+        if(config.AmdTarget!=null) {try {preferred=Amd.ResolveTarget(config.AmdTarget,amd.Items.Cast<AdlTarget>().ToList());}catch(Exception e){Append(e.Message);}}
+        else {var candidates=amd.Items.Cast<AdlTarget>().Where(a=>a.Name.IndexOf("LG",StringComparison.OrdinalIgnoreCase)>=0).ToList();if(candidates.Count==1)preferred=candidates[0];}
+        foreach(MonitorInfo m in target.Items)if(!string.IsNullOrEmpty(config.TargetIdentity)?m.Identity==config.TargetIdentity:preferred!=null && m.Identity==preferred.Identity)target.SelectedItem=m;
+        foreach(MonitorInfo m in fallback.Items)if(!string.IsNullOrEmpty(config.FallbackIdentity) && m.Identity==config.FallbackIdentity)fallback.SelectedItem=m;
+        if(fallback.SelectedIndex<0 && string.IsNullOrEmpty(config.FallbackIdentity) && target.SelectedItem!=null) {
             var shared=(MonitorInfo)target.SelectedItem;
             fallback.SelectedItem=monitors.Where(m=>m.Device!=shared.Device && m.Bounds.Right<=shared.Bounds.Left).OrderByDescending(m=>m.Bounds.Right).FirstOrDefault();
         }
-        foreach(AdlTarget a in amd.Items)if(config.AmdTarget!=null && a.Adapter==config.AmdTarget.Adapter && a.Display==config.AmdTarget.Display)amd.SelectedItem=a;
-        if(amd.SelectedIndex<0 && preferred!=null)amd.SelectedItem=preferred;
+        if(preferred!=null)amd.SelectedItem=preferred;
+        if(!string.IsNullOrEmpty(config.Target) && string.IsNullOrEmpty(config.TargetIdentity))Append("旧設定の画面番号ではなくモニターを再識別しました。復旧後に退避先を確認し、設定を保存してください。");
         Append("画面を "+monitors.Count+" 台検出しました。退避先の27インチを選択してください。");
     }
     void Save() {
@@ -137,8 +153,8 @@ public class MainForm : Form {
         if(game && (target.SelectedItem==null || fallback.SelectedItem==null || amd.SelectedItem==null))throw new Exception("45インチ・27インチ・LG入力切替先を選択してください。");
         if(game) {
             var t=(MonitorInfo)target.SelectedItem;var f=(MonitorInfo)fallback.SelectedItem;var a=(AdlTarget)amd.SelectedItem;
-            if(t.Device==f.Device || a.Device!=t.Device || a.Name.IndexOf("LG",StringComparison.OrdinalIgnoreCase)<0)throw new Exception("45インチのLGモニターと、別の27インチを選択してください。");
-            config.Target=t.Device;config.Fallback=f.Device;config.AmdTarget=a;
+            if(t.Device==f.Device || a.Device!=t.Device || a.Identity!=t.Identity || string.IsNullOrEmpty(t.Identity) || string.IsNullOrEmpty(f.Identity) || a.Name.IndexOf("LG",StringComparison.OrdinalIgnoreCase)<0)throw new Exception("45インチのLGモニターと、別の27インチを選択してください。");
+            config.Target=t.Device;config.Fallback=f.Device;config.TargetIdentity=t.Identity;config.FallbackIdentity=f.Identity;config.AmdTarget=a;
         }
         if(string.IsNullOrWhiteSpace(host.Text))throw new Exception("ゲーム用PCのIPアドレスまたは名前を入力してください。");
         config.Role=game?"game":"work";config.Host=host.Text.Trim();config.Port=(int)port.Value;Files.Save("settings.json",config);StartServer();Append("設定を保存しました。");status.Text=config.Role=="game"?controller.Status:"仕事用PC • ゲーム用PCへの返却準備";

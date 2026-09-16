@@ -12,6 +12,7 @@ using System.Web.Script.Serialization;
 namespace DisplayHandoff {
 public class Settings {
     public string Role="game", Target="", Fallback="", Host="";
+    public string TargetIdentity, FallbackIdentity;
     public AdlTarget AmdTarget;
     public int Port=45845;
     public string ProtectedKey="";
@@ -39,6 +40,7 @@ public static class Files {
 }
 public interface IHardware {
     List<MonitorInfo> Snapshot();
+    AdlTarget ResolveTarget(AdlTarget saved);
     void Move(List<MonitorInfo> monitors,string target,string fallback);
     void Detach(List<MonitorInfo> monitors,string target,string fallback);
     void Restore(List<MonitorInfo> monitors);
@@ -46,6 +48,7 @@ public interface IHardware {
 }
 public class Hardware : IHardware {
     public List<MonitorInfo> Snapshot() { return Displays.List(); }
+    public AdlTarget ResolveTarget(AdlTarget saved) {using(var amd=new Amd())return Amd.ResolveTarget(saved,amd.List());}
     public void Move(List<MonitorInfo> list,string target,string fallback) { int n=Displays.MoveWindows(list.Single(m=>m.Device==target),list.Single(m=>m.Device==fallback)); Files.Log("退避したウィンドウ: "+n); }
     public void Detach(List<MonitorInfo> list,string target,string fallback) { Displays.Detach(list,target,fallback); }
     public void Restore(List<MonitorInfo> list) { Displays.Restore(list); }
@@ -56,15 +59,21 @@ public class Controller {
     public Settings Config;
     public Controller(Settings config,IHardware hardware) {Config=config;hw=hardware;}
     public bool Pending {get{return File.Exists(Files.PathFor("restore.json"));}}
-    public string Status {get{return Pending?"仕事用PCへ貸出中 / 復旧データあり":"ゲーム用PCで使用";}}
+    public string Status {get{if(!Pending)return "ゲーム用PCで使用";try{return Files.Read<SavedState>("restore.json").Stage=="work"?"仕事用PCへ貸出中":"前回の処理が未完了 / 復旧が必要";}catch{return "復旧データを確認してください";}}}
     void Validate(List<MonitorInfo> list) {
         if(Config.Role!="game") throw new Exception("ゲーム用PCの設定が必要です。");
-        if(Config.Target==Config.Fallback || !list.Any(m=>m.Device==Config.Target) || !list.Any(m=>m.Device==Config.Fallback)) throw new Exception("45インチと退避先の27インチを別々に選択してください。");
-        if(Config.AmdTarget==null || Config.AmdTarget.Name.IndexOf("LG",StringComparison.OrdinalIgnoreCase)<0 || Config.AmdTarget.Device!=Config.Target) throw new Exception("45インチのWindows画面と、AMDのLGモニターが一致していません。");
+        if(string.IsNullOrEmpty(Config.TargetIdentity) || string.IsNullOrEmpty(Config.FallbackIdentity))throw new Exception("旧バージョンの画面設定です。モニター再検出で45インチと退避先を確認し、設定を保存してください。");
+        var target=list.Where(m=>m.Identity==Config.TargetIdentity).ToList();
+        var fallback=list.Where(m=>m.Identity==Config.FallbackIdentity).ToList();
+        if(target.Count!=1 || fallback.Count!=1 || Config.TargetIdentity==Config.FallbackIdentity)throw new Exception("保存した45インチまたは退避先を識別できません。接続とモニター設定を確認してください。");
+        var resolved=hw.ResolveTarget(Config.AmdTarget);
+        if(resolved.Name.IndexOf("LG",StringComparison.OrdinalIgnoreCase)<0 || resolved.Identity!=Config.TargetIdentity || resolved.Device!=target[0].Device)throw new Exception("45インチのWindows画面とAMDのLGモニターが一致していません。");
+        Config.Target=target[0].Device;Config.Fallback=fallback[0].Device;Config.AmdTarget=resolved;
+        Files.Save("settings.json",Config);
     }
     public string Give() {
         lock(gate) {
-            if(Pending) return "すでに貸出中です。戻す場合は復旧ボタンを使ってください。";
+            if(Pending) return Status+"。「元の画面構成へ復旧」を実行してください。";
             var list=hw.Snapshot(); Validate(list);
             var state=new SavedState {Stage="preparing",Monitors=list,Target=Config.AmdTarget};
             Files.Save("restore.json",state);
@@ -91,6 +100,7 @@ public class Controller {
         // Even if verification failed, try to bring the physical monitor back.
         try {hw.Switch(state.Target,0xd0);} catch(Exception e) { throw new Exception("DisplayPortへの切替に失敗。復旧データは保持しています。 "+e.Message+(topologyError==null?"":" / "+topologyError.Message)); }
         if(topologyError!=null) throw topologyError;
+        Files.Save("last-restored.json",state);
         File.Delete(Files.PathFor("restore.json")); Files.Log("元のWindows画面構成を復元、DisplayPort切替要求を送信");
         return "ゲーム用PCの画面構成を復元し、DisplayPortへ切替要求を送りました。";
     }
