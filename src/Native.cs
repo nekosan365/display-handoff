@@ -9,6 +9,7 @@ namespace DisplayHandoff {
 public class MonitorInfo {
     public string Device, Identity, Name;
     public bool Primary;
+    public bool Active=true;
     public byte[] Mode;
     public override string ToString() { return Name + "  [" + Device.Replace(@"\\.\", "") + "] " + BitConverter.ToInt32(Mode,172) + " × " + BitConverter.ToInt32(Mode,176) + (Bounds.X<0?" 左側":Bounds.X>0?" 右側":""); }
     public Rectangle Bounds { get { return new Rectangle(BitConverter.ToInt32(Mode,76), BitConverter.ToInt32(Mode,80), BitConverter.ToInt32(Mode,172), BitConverter.ToInt32(Mode,176)); } }
@@ -45,10 +46,12 @@ public static class Displays {
             if (!EnumDisplayDevices(null,i,ref d,0)) break;
             if ((!includeInactive && (d.Flags & 1)==0) || (d.Flags & 8)!=0) continue;
             byte[] mode = new byte[220]; mode[68]=220;
-            if (!EnumDisplaySettings(d.Name,-1,mode) && (!includeInactive || !EnumDisplaySettings(d.Name,-2,mode))) continue;
+            bool hasMode=EnumDisplaySettings(d.Name,-1,mode);
+            if(!hasMode && includeInactive)hasMode=EnumDisplaySettings(d.Name,-2,mode);
+            if(!hasMode && !includeInactive)continue;
             var child = new DeviceInfo(); child.cb=Marshal.SizeOf(child);
-            EnumDisplayDevices(d.Name,0,ref child,0);
-            result.Add(new MonitorInfo { Device=d.Name, Identity=child.Id, Name=child.Description ?? d.Description, Primary=(d.Flags & 4)!=0, Mode=mode });
+            if(!EnumDisplayDevices(d.Name,0,ref child,0) || string.IsNullOrEmpty(child.Id))continue;
+            result.Add(new MonitorInfo { Device=d.Name, Identity=child.Id, Name=child.Description ?? d.Description, Primary=(d.Flags & 4)!=0, Active=(d.Flags & 1)!=0, Mode=mode });
         }
         return result;
     }
@@ -56,6 +59,13 @@ public static class Displays {
         var result=new List<MonitorInfo>();
         foreach(var item in saved) {
             var matches=current.Where(m=>!string.IsNullOrEmpty(item.Identity) && m.Identity==item.Identity).ToList();
+            // A detached monitor can appear on several inactive GDI source aliases.
+            // Prefer its unique active source; otherwise reuse the saved source only
+            // when the physical identity still matches. Never pick an arbitrary alias.
+            if(matches.Count>1) {
+                var active=matches.Where(m=>m.Active).ToList();
+                matches=active.Count>0?active:matches.Where(m=>m.Device==item.Device).ToList();
+            }
             if(matches.Count!=1 || result.Any(m=>m.Identity==item.Identity))
                 throw new Exception("保存したモニターを一意に識別できません。配線を確認してください: " + item.Name);
             result.Add(new MonitorInfo {Device=matches[0].Device,Identity=item.Identity,Name=item.Name,Primary=item.Primary,Mode=(byte[])item.Mode.Clone()});

@@ -20,7 +20,7 @@ static class Program {
             try {
                 object amd;
                 try {using(var a=new Amd()) amd=a.List();} catch(Exception e) {amd=e.Message;}
-                File.WriteAllText(args.Last(),Files.Json.Serialize(new {Monitors=Displays.List(),Amd=amd}),System.Text.Encoding.UTF8); return 0;
+                File.WriteAllText(args.Last(),Files.Json.Serialize(new {Monitors=Displays.List(),AllMonitors=Displays.List(true),Amd=amd}),System.Text.Encoding.UTF8); return 0;
             } catch(Exception e) {File.WriteAllText(args.Last(),e.ToString());return 1;}
         }
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -86,7 +86,7 @@ public class MainForm : Form {
     bool busy,exit;
     public MainForm(string[] args) {
         config=Files.Load(); controller=new Controller(config,new Hardware());
-        Text="Display Handoff 0.1.1 • 45GX950A"; Font=new Font("Yu Gothic UI",10); BackColor=Color.FromArgb(245,247,251);
+        Text="Display Handoff 0.1.2 • 45GX950A"; Font=new Font("Yu Gothic UI",10); BackColor=Color.FromArgb(245,247,251);
         ClientSize=new Size(820,930); MinimumSize=new Size(800,920); StartPosition=FormStartPosition.CenterScreen;
         var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(28),ColumnCount=1,RowCount=8};
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));
@@ -132,8 +132,21 @@ public class MainForm : Form {
     void RoleUI() {bool game=role.SelectedIndex==0;target.Enabled=fallback.Enabled=amd.Enabled=game;main.Text=game?"仕事用PCへ渡す  →":"ゲーム用PCへ返す  →";}
     void Scan() {
         var monitors=Displays.List();target.Items.Clear();fallback.Items.Clear();amd.Items.Clear();
+        SavedState pending=null;
+        if(controller.Pending) {
+            try {
+                pending=Files.Read<SavedState>("restore.json");
+                var id=pending.Target==null?null:pending.Target.Identity;
+                var saved=string.IsNullOrEmpty(id)?null:pending.Monitors.SingleOrDefault(m=>m.Identity==id);
+                if(saved!=null && !monitors.Any(m=>m.Identity==id))monitors.Add(new MonitorInfo {Device=saved.Device,Identity=id,Name=pending.Target.Name+"（出力停止中・復旧対象）",Mode=(byte[])saved.Mode.Clone(),Active=false});
+            }catch(Exception e){Append("復旧情報の表示: "+e.Message);}
+        }
         foreach(var m in monitors){target.Items.Add(m);fallback.Items.Add(m);}
         try {using(var a=new Amd()) foreach(var t in a.List()){amd.Items.Add(t);foreach(var m in monitors.Where(m=>m.Device==t.Device))m.Name=t.Name;}}catch(Exception e){Append("AMD検出: "+e.Message);}
+        if(pending!=null && pending.Target!=null && !string.IsNullOrEmpty(pending.Target.Identity) && !amd.Items.Cast<AdlTarget>().Any(a=>a.Identity==pending.Target.Identity)) {
+            var t=pending.Target;
+            amd.Items.Add(new AdlTarget {Name=t.Name+"（出力再開後に再検出）",Identity=t.Identity,Device=t.Device,Adapter=t.Adapter,Display=t.Display});
+        }
         AdlTarget preferred=null;
         if(config.AmdTarget!=null) {try {preferred=Amd.ResolveTarget(config.AmdTarget,amd.Items.Cast<AdlTarget>().ToList());}catch(Exception e){Append(e.Message);}}
         else {var candidates=amd.Items.Cast<AdlTarget>().Where(a=>a.Name.IndexOf("LG",StringComparison.OrdinalIgnoreCase)>=0).ToList();if(candidates.Count==1)preferred=candidates[0];}
@@ -145,7 +158,7 @@ public class MainForm : Form {
         }
         if(preferred!=null)amd.SelectedItem=preferred;
         if(!string.IsNullOrEmpty(config.Target) && string.IsNullOrEmpty(config.TargetIdentity))Append("旧設定の画面番号ではなくモニターを再識別しました。復旧後に退避先を確認し、設定を保存してください。");
-        Append("画面を "+monitors.Count+" 台検出しました。退避先の27インチを選択してください。");
+        Append("表示中の画面: "+monitors.Count(m=>m.Active)+" 台。"+(monitors.Any(m=>!m.Active)?"LGは出力停止中です。「元の画面構成へ復旧」で再開できます。":"退避先の27インチを確認してください。"));
     }
     void Save() {
         if(busy || controller.Pending)throw new Exception("実行中・貸出中は設定を変更できません。先に復旧してください。");
@@ -176,7 +189,7 @@ public class MainForm : Form {
             busy=true;main.Enabled=false;actions.Enabled=false;status.Text="仕事用PCからの返却要求を処理中…";
             try {var result=await Task.Run(()=>controller.Restore());Append(result);status.Text=controller.Status;completion.SetResult(result);}
             catch(Exception e){Append(e.Message);status.Text="復旧できませんでした • ログを確認してください";completion.SetException(e);}
-            finally {busy=false;main.Enabled=true;actions.Enabled=true;}
+            finally {busy=false;main.Enabled=true;actions.Enabled=true;Scan();}
         }));
         return completion.Task.GetAwaiter().GetResult();
     }
@@ -185,7 +198,7 @@ public class MainForm : Form {
         if(busy)return;busy=true;main.Enabled=false;actions.Enabled=false;status.Text="切替処理中…（入力テストは15秒後に戻ります）";
         try {var result=await Task.Run(action);Append(result);status.Text=config.Role=="game"?controller.Status:"ゲーム用PCから応答を受信";}
         catch(Exception e){Append(e.Message);status.Text="完了できませんでした • ログを確認してください";ShowApp();}
-        finally {busy=false;main.Enabled=true;actions.Enabled=true;}
+        finally {busy=false;main.Enabled=true;actions.Enabled=true;if(config.Role=="game")Scan();}
     }
     void Export() {
         if(config.Role!="game" || server==null)throw new Exception("ゲーム用PCの設定を保存してください。");

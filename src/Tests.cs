@@ -62,6 +62,20 @@ static class Tests {
             Displays.Put(remapped[2].Mode,184,144);Assert(!Displays.Matches(physical,remapped),"refresh mismatch requires restore");
             Throws(()=>Displays.ResolveSaved(physical,renumbered.Take(2).ToList()),"missing physical display is not replaced by same number");
             var duplicates=renumbered.Concat(new[]{renumbered[0]}).ToList();Throws(()=>Displays.ResolveSaved(physical,duplicates),"ambiguous physical display is rejected");
+            var inactiveAliases=new List<MonitorInfo>{
+                new MonitorInfo {Device="lg",Identity="id-lg",Active=false,Mode=new byte[220]},
+                new MonitorInfo {Device="unused-source-4",Identity="id-lg",Active=false,Mode=new byte[220]},
+                new MonitorInfo {Device="unused-source-5",Identity="id-lg",Active=false,Mode=new byte[220]},
+                physical[1],physical[2]};
+            var detachedRestore=Displays.ResolveSaved(physical,inactiveAliases);
+            Assert(detachedRestore[0].Device=="lg" && detachedRestore[0].Bounds.Width==5120,"restore detached LG through saved physical-identity-matched source");
+            Assert(detachedRestore[0].Primary,"restore detached monitor primary state from snapshot");
+            inactiveAliases[1].Active=true;
+            Assert(Displays.ResolveSaved(physical,inactiveAliases)[0].Device=="unused-source-4","unique active alias takes precedence over saved inactive source");
+            inactiveAliases[1].Active=false;inactiveAliases[0].Device="renamed-source";
+            Throws(()=>Displays.ResolveSaved(physical,inactiveAliases),"multiple inactive aliases without saved source require user action");
+            inactiveAliases[0].Device="lg";inactiveAliases[0].Identity="different-monitor";
+            Throws(()=>Displays.ResolveSaved(physical,inactiveAliases),"saved source reused by another physical monitor is never restored");
             var legacy=new AdlTarget {Name="LG ULTRAGEAR+",Device="DISPLAY1",Adapter=0,Display=8};
             var detected=new AdlTarget {Name="LG ULTRAGEAR+",Device="DISPLAY3",Identity="id-lg",Adapter=2,Display=8};
             Assert(Amd.ResolveTarget(legacy,new List<AdlTarget>{detected}).Adapter==2,"legacy AMD index migration");
