@@ -42,7 +42,8 @@ static class Program {
             } catch(Exception e){Files.Log(e.ToString());return 1;}
         }
         if(args.Contains("--preview")) {
-            Files.Root=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args.Last())),"preview-state");
+            Files.Root=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args.Last())),Path.GetFileNameWithoutExtension(args.Last())+"-state");
+            MainForm.Preview=true;MainForm.PreviewScenario=args.Length>2?args[1]:"ready";MainForm.PreparePreview();
             using(var form=new MainForm(new string[0])) {form.ShowInTaskbar=false;form.Opacity=0;form.Show();form.PerformLayout();Application.DoEvents();using(var bitmap=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(bitmap,new Rectangle(0,0,form.Width,form.Height));bitmap.Save(args.Last());}}
             return 0;
         }
@@ -73,7 +74,7 @@ static class Program {
         return 0;
     }
 }
-public class MainForm : Form {
+public partial class MainForm : Form {
     readonly Settings config; readonly Controller controller; Server server;
     readonly ComboBox role=new ComboBox(),target=new ComboBox(),fallback=new ComboBox(),amd=new ComboBox();
     readonly TextBox host=new TextBox(),log=new TextBox();
@@ -86,33 +87,7 @@ public class MainForm : Form {
     bool busy,exit;
     public MainForm(string[] args) {
         config=Files.Load(); controller=new Controller(config,new Hardware());
-        Text="Display Handoff 0.1.2 • 45GX950A"; Font=new Font("Yu Gothic UI",10); BackColor=Color.FromArgb(245,247,251);
-        ClientSize=new Size(820,930); MinimumSize=new Size(800,920); StartPosition=FormStartPosition.CenterScreen;
-        var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(28),ColumnCount=1,RowCount=8};
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,264));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,62));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,126));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30)); Controls.Add(layout);
-        layout.Controls.Add(new Label {Text="45インチを、使うPCへ。",Font=new Font(Font.FontFamily,23,FontStyle.Bold),Dock=DockStyle.Fill,AutoSize=false},0,0);
-        status.Font=new Font(Font.FontFamily,14,FontStyle.Bold); status.BackColor=Color.FromArgb(226,236,255);status.Padding=new Padding(16);status.Dock=DockStyle.Fill;status.Text="設定を保存して、切替を始めましょう。";layout.Controls.Add(status,0,1);
-        var settings=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=6,Padding=new Padding(0,15,0,0)};
-        settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,172)); settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        foreach(var c in new[]{role,target,fallback,amd}) {c.DropDownStyle=ComboBoxStyle.DropDownList;c.Dock=DockStyle.Fill;}
-        role.Items.AddRange(new object[]{"ゲーム用PC（デスクトップ）","仕事用PC（Windowsノート）"});role.SelectedIndex=config.Role=="work"?1:0;
-        host.Text=config.Host; host.Dock=DockStyle.Fill;port.Minimum=1024;port.Maximum=65535;port.Value=config.Port;port.Dock=DockStyle.Fill;
-        AddSetting(settings,0,"このPC",role);AddSetting(settings,1,"45インチの画面",target);AddSetting(settings,2,"27インチの退避先",fallback);AddSetting(settings,3,"LGの入力切替先",amd);AddSetting(settings,4,"ゲーム用PCのIP / 名前",host);AddSetting(settings,5,"接続ポート",port);
-        layout.Controls.Add(settings,0,2);
-        main.Dock=DockStyle.Fill;main.BackColor=Color.FromArgb(45,96,229);main.ForeColor=Color.White;main.FlatStyle=FlatStyle.Flat;main.Font=new Font(Font.FontFamily,14,FontStyle.Bold);main.Click+=async(s,e)=>await RunPrimary();layout.Controls.Add(main,0,3);
-        actions.Dock=DockStyle.Fill;actions.Padding=new Padding(0,8,0,0);layout.Controls.Add(actions,0,4);
-        AddButton("設定を保存",()=>Save()); AddButton("モニター再検出",()=>Scan());
-        AddButton("接続を確認",async()=>await RunJob(()=>config.Role=="work"?Wire.Call(config,"status"):"ゲーム用PCの状態: "+controller.Status));
-        AddButton("ペアリングを書出し",()=>Export()); AddButton("ペアリングを読込",()=>Import());
-        AddButton("ショートカット作成",()=>Shortcut(false));AddButton("ログイン時に起動",()=>Shortcut(true));
-        AddButton("入力を15秒テスト",async()=>await RunJob(()=>{if(config.Role!="game")throw new Exception("ゲーム用PCから実行してください。");return controller.TestInput();}));
-        AddButton("元の画面構成へ復旧",async()=>await RunJob(()=>config.Role=="game"?controller.Restore():Wire.Call(config,"return")));
-        network.Dock=DockStyle.Fill;network.ForeColor=Color.FromArgb(65,78,101);layout.Controls.Add(network,0,5);
-        log.Multiline=true;log.ReadOnly=true;log.Dock=DockStyle.Fill;log.ScrollBars=ScrollBars.Vertical;log.BorderStyle=BorderStyle.FixedSingle;log.BackColor=Color.White;layout.Controls.Add(log,0,6);
-        layout.Controls.Add(new Label {Text="45GX950A  •  DP ⇄ USB-C     /     27インチ2台はゲーム用PCで継続",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Color.DimGray},0,7);
+        BuildInterface();
         role.SelectedIndexChanged+=(s,e)=>RoleUI();Scan();RoleUI();StartServer();
         tray.Icon=SystemIcons.Application;tray.Text="Display Handoff";tray.Visible=true;tray.DoubleClick+=(s,e)=>ShowApp();
         var menu=new ContextMenuStrip();menu.Items.Add("アプリを開く",null,(s,e)=>ShowApp());menu.Items.Add("仕事用PCへ渡す",null,async(s,e)=>await RunJob(()=>{if(config.Role!="game")throw new Exception("ゲーム用PCで実行してください。");return controller.Give();}));
@@ -120,18 +95,21 @@ public class MainForm : Form {
         menu.Items.Add("終了",null,(s,e)=>{if(busy || controller.Pending){ShowApp();Append("実行中または貸出中です。復旧してから終了してください。");return;}exit=true;Close();});tray.ContextMenuStrip=menu;
         FormClosing+=(s,e)=>{if(!exit && e.CloseReason==CloseReason.UserClosing){e.Cancel=true;Hide();}};
         FormClosed+=(s,e)=>{timer.Stop();tray.Dispose();if(server!=null)server.Dispose();};
-        timer.Interval=350;timer.Tick+=async(s,e)=>{if(Program.ShowEvent.WaitOne(0))ShowApp();if(!busy && Program.GiveEvent.WaitOne(0))await RunJob(()=>{if(config.Role!="game")throw new Exception("このPCは仕事用PCとして設定されています。");return controller.Give();});if(!busy && Program.ReturnEvent.WaitOne(0))await RunJob(()=>config.Role=="game"?controller.Restore():Wire.Call(config,"return"));};timer.Start();
-        Shown+=async(s,e)=>{if(controller.Pending)Append("復旧データがあります。「元の画面構成へ復旧」で戻せます。");if(args.Contains("--give"))await RunPrimary();else if(args.Contains("--return"))await RunJob(()=>config.Role=="game"?controller.Restore():Wire.Call(config,"return"));else if(args.Contains("--tray"))Hide();};
+        timer.Interval=350;timer.Tick+=async(s,e)=>{if(Program.ShowEvent!=null && Program.ShowEvent.WaitOne(0))ShowApp();if(!busy && Program.GiveEvent!=null && Program.GiveEvent.WaitOne(0))await RunJob(()=>{if(config.Role!="game")throw new Exception("このPCは仕事用PCとして設定されています。");return controller.Give();});if(!busy && Program.ReturnEvent!=null && Program.ReturnEvent.WaitOne(0))await RunJob(()=>config.Role=="game"?controller.Restore():Wire.Call(config,"return"));};if(!Preview)timer.Start();
+        Shown+=async(s,e)=>{if(controller.Pending)Append("復旧データがあります。「元の画面構成へ復旧」で戻せます。");if(args.Contains("--give"))await RunJob(()=>controller.Give());else if(args.Contains("--return"))await RunJob(()=>config.Role=="game"?controller.Restore():Wire.Call(config,"return"));else if(args.Contains("--tray"))Hide();};
         if(!string.IsNullOrEmpty(config.Target))status.Text=config.Role=="game"?controller.Status:"仕事用PC • ゲーム用PCへの返却準備";
-        Append("まずモニターと退避先を確認し「設定を保存」。仕事用PCにはペアリングファイルを読み込ませてください。");
+        Append("切替は「切り替え」タブから。最初の登録は「設定」、詳しい操作記録は「使い方・ログ」で確認できます。");
+        RenderHome();
+        if(PreviewScenario=="settings")pages.SelectedIndex=1;
+        if(PreviewScenario=="help")pages.SelectedIndex=2;
     }
     void AddSetting(TableLayoutPanel p,int row,string label,Control control) {p.RowStyles.Add(new RowStyle(SizeType.Percent,100f/6));p.Controls.Add(new Label {Text=label,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft},0,row);p.Controls.Add(control,1,row);}
     void AddButton(string title,Action action) {var b=new Button {Text=title,AutoSize=true,Height=33,FlatStyle=FlatStyle.System};b.Click+=(s,e)=>{try {action();}catch(Exception error){Append(error.Message);MessageBox.Show(this,error.Message,"設定を確認してください");}};actions.Controls.Add(b);}
     void ShowApp() {Show();WindowState=FormWindowState.Normal;Activate();}
     void Append(string message) {if(IsDisposed)return;if(InvokeRequired){BeginInvoke(new Action<string>(Append),message);return;}log.AppendText(DateTime.Now.ToString("HH:mm:ss")+"  "+message+Environment.NewLine);}
-    void RoleUI() {bool game=role.SelectedIndex==0;target.Enabled=fallback.Enabled=amd.Enabled=game;main.Text=game?"仕事用PCへ渡す  →":"ゲーム用PCへ返す  →";}
+    void RoleUI() {bool game=role.SelectedIndex==0;target.Enabled=fallback.Enabled=amd.Enabled=game;}
     void Scan() {
-        var monitors=Displays.List();target.Items.Clear();fallback.Items.Clear();amd.Items.Clear();
+        var monitors=Preview?DemoMonitors().Where(m=>m.Active).ToList():Displays.List();target.Items.Clear();fallback.Items.Clear();amd.Items.Clear();
         SavedState pending=null;
         if(controller.Pending) {
             try {
@@ -142,7 +120,7 @@ public class MainForm : Form {
             }catch(Exception e){Append("復旧情報の表示: "+e.Message);}
         }
         foreach(var m in monitors){target.Items.Add(m);fallback.Items.Add(m);}
-        try {using(var a=new Amd()) foreach(var t in a.List()){amd.Items.Add(t);foreach(var m in monitors.Where(m=>m.Device==t.Device))m.Name=t.Name;}}catch(Exception e){Append("AMD検出: "+e.Message);}
+        try {var detected=Preview?new System.Collections.Generic.List<AdlTarget>{config.AmdTarget}:ReadAmd();foreach(var t in detected.Where(t=>t!=null)){amd.Items.Add(t);foreach(var m in monitors.Where(m=>m.Device==t.Device && m.Active))m.Name=t.Name;}}catch(Exception e){Append("AMD検出: "+e.Message);}
         if(pending!=null && pending.Target!=null && !string.IsNullOrEmpty(pending.Target.Identity) && !amd.Items.Cast<AdlTarget>().Any(a=>a.Identity==pending.Target.Identity)) {
             var t=pending.Target;
             amd.Items.Add(new AdlTarget {Name=t.Name+"（出力再開後に再検出）",Identity=t.Identity,Device=t.Device,Adapter=t.Adapter,Display=t.Display});
@@ -170,9 +148,10 @@ public class MainForm : Form {
             config.Target=t.Device;config.Fallback=f.Device;config.TargetIdentity=t.Identity;config.FallbackIdentity=f.Identity;config.AmdTarget=a;
         }
         if(string.IsNullOrWhiteSpace(host.Text))throw new Exception("ゲーム用PCのIPアドレスまたは名前を入力してください。");
-        config.Role=game?"game":"work";config.Host=host.Text.Trim();config.Port=(int)port.Value;Files.Save("settings.json",config);StartServer();Append("設定を保存しました。");status.Text=config.Role=="game"?controller.Status:"仕事用PC • ゲーム用PCへの返却準備";
+        config.Role=game?"game":"work";config.Host=host.Text.Trim();config.Port=(int)port.Value;Files.Save("settings.json",config);StartServer();Append("設定を保存しました。");homeError=null;RenderHome();pages.SelectedIndex=0;
     }
     void StartServer() {
+        if(Preview){network.Text="接続先: GAME-PC   /   ポート 45845";return;}
         if(server!=null){server.Dispose();server=null;}
         if(config.Role!="game"){network.Text="接続先: "+config.Host+":"+config.Port;return;}
         if(string.IsNullOrEmpty(config.Target)){network.Text="モニター設定を保存すると、返却要求の待受を開始します。";return;}
@@ -187,18 +166,26 @@ public class MainForm : Form {
         BeginInvoke(new Action(async delegate {
             if(busy){completion.SetException(new Exception("別の切替処理を実行中です。少し待って再試行してください。"));return;}
             busy=true;main.Enabled=false;actions.Enabled=false;status.Text="仕事用PCからの返却要求を処理中…";
-            try {var result=await Task.Run(()=>controller.Restore());Append(result);status.Text=controller.Status;completion.SetResult(result);}
-            catch(Exception e){Append(e.Message);status.Text="復旧できませんでした • ログを確認してください";completion.SetException(e);}
-            finally {busy=false;main.Enabled=true;actions.Enabled=true;Scan();}
+            try {var result=await Task.Run(()=>controller.Restore());Append(result);status.Text=controller.Status;homeError=null;completion.SetResult(result);}
+            catch(Exception e){Append(e.Message);homeError=e.Message;status.Text="復旧できませんでした • ログを確認してください";completion.SetException(e);}
+            finally {busy=false;main.Enabled=true;actions.Enabled=true;Scan();RenderHome();}
         }));
         return completion.Task.GetAwaiter().GetResult();
     }
-    async Task RunPrimary() {bool gameSelected=role.SelectedIndex==0;await RunJob(()=>{if(gameSelected!=(config.Role=="game"))throw new Exception("PCの役割を保存してください。");if(config.Role=="game" && server==null)throw new Exception("設定を保存して返却の待受を開始してください。");return config.Role=="game"?controller.Give():Wire.Call(config,"return");});}
-    async Task RunJob(Func<string> action) {
-        if(busy)return;busy=true;main.Enabled=false;actions.Enabled=false;status.Text="切替処理中…（入力テストは15秒後に戻ります）";
-        try {var result=await Task.Run(action);Append(result);status.Text=config.Role=="game"?controller.Status:"ゲーム用PCから応答を受信";}
-        catch(Exception e){Append(e.Message);status.Text="完了できませんでした • ログを確認してください";ShowApp();}
-        finally {busy=false;main.Enabled=true;actions.Enabled=true;if(config.Role=="game")Scan();}
+    async Task RunPrimary() {
+        string action=PrimaryAction(config.Role=="game",controller.Pending,Configured(),MonitorsAvailable());
+        if(action=="settings") {pages.SelectedIndex=1;return;}
+        await RunJob(()=>{
+            if(action=="restore")return controller.Restore();
+            if(config.Role=="game" && server==null)throw new Exception("「設定」で接続を確認し、設定を保存してください。");
+            return action=="give"?controller.Give():Wire.Call(config,"return");
+        });
+    }
+    async Task RunJob(Func<string> action,string progress="処理しています…") {
+        if(busy)return;busy=true;main.Enabled=false;actions.Enabled=false;homeError=null;status.Text=progress;statusDetail.Text="完了するまで、そのままお待ちください。";
+        try {var result=await Task.Run(action);Append(result);lastResult=result;}
+        catch(Exception e){Append(e.Message);homeError=e.Message;ShowApp();pages.SelectedIndex=0;}
+        finally {busy=false;main.Enabled=true;actions.Enabled=true;if(config.Role=="game")Scan();RenderHome();}
     }
     void Export() {
         if(config.Role!="game" || server==null)throw new Exception("ゲーム用PCの設定を保存してください。");
@@ -214,7 +201,7 @@ public class MainForm : Form {
             var p=Files.Json.Deserialize<Pairing>(File.ReadAllText(dialog.FileName));
             if(p.Format!="DisplayHandoff/1" || Convert.FromBase64String(p.Key).Length!=32 || string.IsNullOrWhiteSpace(p.Host) || p.Port<1024 || p.Port>65535)throw new Exception("ペアリングファイルが不正です。");
             config.SetKey(p.Key);config.Role="work";config.Host=p.Host;config.Port=p.Port;role.SelectedIndex=1;host.Text=p.Host;port.Value=p.Port;
-            Files.Save("settings.json",config);StartServer();Append("仕事用PCとしてペアリングしました。「接続を確認」を押してください。");
+            Files.Save("settings.json",config);StartServer();Append("仕事用PCとして登録しました。「接続を確認」を押してください。");RenderHome();
         }
     }
     void Shortcut(bool startup) {

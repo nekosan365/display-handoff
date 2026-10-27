@@ -22,6 +22,12 @@ static class Tests {
     public static void Run(string output) {
         string oldRoot=Files.Root;Files.Root=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output)),"test-state-"+Guid.NewGuid().ToString("N"));
         try {
+            Assert(MainForm.PrimaryAction(true,false,true,true)=="give","home hands off only when configured and monitors are present");
+            Assert(MainForm.PrimaryAction(true,true,true,false)=="restore","home offers recovery when shared output is detached");
+            Assert(MainForm.PrimaryAction(true,true,false,false)=="restore","recovery remains available with incomplete settings");
+            Assert(MainForm.PrimaryAction(true,false,false,true)=="settings","first launch opens setup rather than switching");
+            Assert(MainForm.PrimaryAction(true,false,true,false)=="settings","missing monitor opens settings");
+            Assert(MainForm.PrimaryAction(false,false,false,false)=="return","work PC returns without requiring local AMD monitor");
             var c=new Settings {Role="game",Target="old-lg",Fallback="old-left",TargetIdentity="id-lg",FallbackIdentity="id-left",AmdTarget=new AdlTarget {Device="old-lg",Identity="id-lg",Name="LG ULTRAGEAR+"},Host="127.0.0.1"};c.SetKey(Wire.Random());
             Assert(!Files.Json.Serialize(c).Contains(c.Key),"key must not be stored in plaintext");
             var h=new Fake();var engine=new Controller(c,h);
