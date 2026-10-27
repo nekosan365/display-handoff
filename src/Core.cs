@@ -13,6 +13,8 @@ namespace DisplayHandoff {
 public class Settings {
     public string Role="game", Target="", Fallback="", Host="";
     public string TargetIdentity, FallbackIdentity;
+    public bool AudioFollowMonitor,AudioIncludeCommunications;
+    public string HandoffAudioId;
     public AdlTarget AmdTarget;
     public int Port=45845;
     public string ProtectedKey="";
@@ -20,7 +22,7 @@ public class Settings {
     public void SetKey(string key) { ProtectedKey=Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(key),null,DataProtectionScope.CurrentUser)); }
 }
 public class Pairing { public string Host; public int Port; public string Key; public string Format="DisplayHandoff/1"; }
-public class SavedState { public string Stage; public List<MonitorInfo> Monitors; public AdlTarget Target; }
+public class SavedState { public string Stage; public List<MonitorInfo> Monitors; public AdlTarget Target; public AudioDefaults AudioBefore; }
 public static class Files {
     public static string Root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DisplayHandoff");
     public static JavaScriptSerializer Json { get { return new JavaScriptSerializer {MaxJsonLength=1024*1024}; } }
@@ -55,11 +57,11 @@ public class Hardware : IHardware {
     public void Switch(AdlTarget target,byte code) { using(var amd=new Amd()) amd.Switch(target,code); }
 }
 public class Controller {
-    readonly object gate=new object(); readonly IHardware hw;
+    readonly object gate=new object(); readonly IHardware hw; readonly IAudioRouting audio;
     public Settings Config;
-    public Controller(Settings config,IHardware hardware) {Config=config;hw=hardware;}
+    public Controller(Settings config,IHardware hardware,IAudioRouting audioRouting=null) {Config=config;hw=hardware;audio=audioRouting??new WindowsAudio();}
     public bool Pending {get{return File.Exists(Files.PathFor("restore.json"));}}
-    public string Status {get{if(!Pending)return "ゲーム用PCで使用";try{return Files.Read<SavedState>("restore.json").Stage=="work"?"仕事用PCへ貸出中":"前回の処理が未完了 / 復旧が必要";}catch{return "復旧データを確認してください";}}}
+    public string Status {get{if(!Pending)return "ゲーム用PCで使用";try{var stage=Files.Read<SavedState>("restore.json").Stage;return stage=="work"?"仕事用PCへ貸出中":stage=="audio-restore"?"画面復旧済み / 音声の復旧が必要":"前回の処理が未完了 / 復旧が必要";}catch{return "復旧データを確認してください";}}}
     void Validate(List<MonitorInfo> list) {
         if(Config.Role!="game") throw new Exception("ゲーム用PCの設定が必要です。");
         if(string.IsNullOrEmpty(Config.TargetIdentity) || string.IsNullOrEmpty(Config.FallbackIdentity))throw new Exception("旧バージョンの画面設定です。モニター再検出で45インチと退避先を確認し、設定を保存してください。");
@@ -75,16 +77,25 @@ public class Controller {
         lock(gate) {
             if(Pending) return Status+"。「元の画面構成へ復旧」を実行してください。";
             var list=hw.Snapshot(); Validate(list);
-            var state=new SavedState {Stage="preparing",Monitors=list,Target=Config.AmdTarget};
+            AudioDefaults audioBefore=null;
+            if(Config.AudioFollowMonitor) {
+                audio.Validate(Config.HandoffAudioId);
+                audioBefore=audio.Capture(Config.AudioIncludeCommunications);
+                audio.Validate(audioBefore.Console);audio.Validate(audioBefore.Multimedia);
+                if(audioBefore.IncludeCommunications)audio.Validate(audioBefore.Communications);
+            }
+            var state=new SavedState {Stage="preparing",Monitors=list,Target=Config.AmdTarget,AudioBefore=audioBefore};
             Files.Save("restore.json",state);
             try {
+                if(audioBefore!=null)audio.Select(Config.HandoffAudioId,Config.AudioIncludeCommunications);
                 hw.Move(list,Config.Target,Config.Fallback);
                 // DDC must be sent while the DP display path is still active.
                 hw.Switch(Config.AmdTarget,0xd1);
                 hw.Detach(list,Config.Target,Config.Fallback);
+                if(audioBefore!=null && !AudioDefaults.IsSelected(audio.Capture(Config.AudioIncludeCommunications),Config.HandoffAudioId))audio.Select(Config.HandoffAudioId,Config.AudioIncludeCommunications);
                 state.Stage="work"; Files.Save("restore.json",state);
                 Files.Log("USB-C切替要求を送信、45インチのWindows出力を無効化");
-                return "仕事用PCへ切替要求を送り、45インチ出力を無効にしました。";
+                return "仕事用PCへ切替要求を送り、45インチ出力を無効にしました。"+(audioBefore==null?"":" ゲーム用PCの音声出力も切り替えました。");
             } catch(Exception error) {
                 Files.Log("引渡し失敗: "+error.Message);
                 try { RestoreInternal(); } catch(Exception recovery) { throw new Exception(error.Message+"\r\n復旧も未完了: "+recovery.Message); }
@@ -95,14 +106,20 @@ public class Controller {
     string RestoreInternal() {
         if(!Pending) return "貸出中の画面構成はありません。";
         var state=Files.Read<SavedState>("restore.json");
-        Exception topologyError=null;
-        try { hw.Restore(state.Monitors); } catch(Exception e) {topologyError=e;}
+        var errors=new List<string>();
+        try { hw.Restore(state.Monitors); } catch(Exception e) {errors.Add("画面構成: "+e.Message);}
         // Even if verification failed, try to bring the physical monitor back.
-        try {hw.Switch(state.Target,0xd0);} catch(Exception e) { throw new Exception("DisplayPortへの切替に失敗。復旧データは保持しています。 "+e.Message+(topologyError==null?"":" / "+topologyError.Message)); }
-        if(topologyError!=null) throw topologyError;
+        try {hw.Switch(state.Target,0xd0);} catch(Exception e) {errors.Add("DisplayPort: "+e.Message);}
+        if(state.AudioBefore!=null) {
+            try {audio.Restore(state.AudioBefore);}catch(Exception e) {
+                if(errors.Count==0){state.Stage="audio-restore";Files.Save("restore.json",state);}
+                errors.Add("音声: "+e.Message);
+            }
+        }
+        if(errors.Count>0)throw new Exception("復旧が完了していません。復旧データを保持しています。\r\n"+string.Join("\r\n",errors));
         Files.Save("last-restored.json",state);
         File.Delete(Files.PathFor("restore.json")); Files.Log("元のWindows画面構成を復元、DisplayPort切替要求を送信");
-        return "ゲーム用PCの画面構成を復元し、DisplayPortへ切替要求を送りました。";
+        return "ゲーム用PCの画面構成を復元し、DisplayPortへ切替要求を送りました。"+(state.AudioBefore==null?"":" 音声出力も切替前の状態へ戻しました。");
     }
     public string Restore() {lock(gate) {return RestoreInternal();}}
     public string TestInput() {

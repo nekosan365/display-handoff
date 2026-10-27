@@ -28,7 +28,7 @@ public partial class MainForm {
         foreach(int height in heights)panel.RowStyles.Add(new RowStyle(height<0?SizeType.Percent:SizeType.Absolute,height<0?100:height));return panel;
     }
     void BuildInterface() {
-        Text="Display Handoff 0.2.0";Font=new Font("Yu Gothic UI",10);BackColor=Color.FromArgb(245,247,251);ForeColor=Ink;
+        Text="Display Handoff 0.3.0";Font=new Font("Yu Gothic UI",10);BackColor=Color.FromArgb(245,247,251);ForeColor=Ink;
         ClientSize=new Size(900,760);MinimumSize=new Size(880,790);StartPosition=FormStartPosition.CenterScreen;AutoScaleMode=AutoScaleMode.Dpi;
         var shell=Stack(84,-1,30);shell.Padding=new Padding(24,12,24,12);Controls.Add(shell);
         var header=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2};header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,65));header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,35));
@@ -50,7 +50,7 @@ public partial class MainForm {
         main.Dock=DockStyle.Fill;main.BackColor=Blue;main.ForeColor=Color.White;main.FlatStyle=FlatStyle.Flat;main.FlatAppearance.BorderSize=0;main.Font=new Font(Font.FontFamily,16,FontStyle.Bold);main.Margin=new Padding(0,0,0,8);main.Click+=async(s,e)=>await RunPrimary();homeLayout.Controls.Add(main,0,2);
         nextStep.Dock=DockStyle.Fill;nextStep.ForeColor=Muted;nextStep.Padding=new Padding(4,8,4,0);homeLayout.Controls.Add(nextStep,0,3);
         var tools=Row();tools.Controls.Add(ActionButton("元の画面構成へ復旧",async()=>await RunJob(()=>config.Role=="game"?controller.Restore():Wire.Call(config,"return"),"ゲーム用PCの画面に戻しています…")));
-        tools.Controls.Add(ActionButton("設定を開く",()=>pages.SelectedIndex=1));tools.Controls.Add(ActionButton("使い方・詳しいログ",()=>pages.SelectedIndex=2));homeLayout.Controls.Add(tools,0,4);
+        tools.Controls.Add(ActionButton("設定を開く",()=>pages.SelectedIndex=1));tools.Controls.Add(ActionButton("使い方・詳しいログ",()=>pages.SelectedIndex=2));tools.Controls.Add(ActionButton("音声設定",()=>{RefreshAudio();pages.SelectedIndex=3;}));homeLayout.Controls.Add(tools,0,4);
         resultLabel.Dock=DockStyle.Fill;resultLabel.ForeColor=Muted;resultLabel.Padding=new Padding(4,8,4,0);homeLayout.Controls.Add(resultLabel,0,5);
 
         var setupLayout=Stack(54,252,32,130,-1);setup.Controls.Add(setupLayout);
@@ -73,6 +73,7 @@ public partial class MainForm {
         helpLayout.Controls.Add(TextLabel("いつもの使い方\r\n① ゲーム用PCで「仕事用PCへ渡す」を押します。\r\n② 45インチは仕事用へ。ゲーム用PCはサブモニターで使えます。\r\n③ 仕事用PCで「ゲーム用PCへ返す」を押すと、元の画面構成へ戻します。\r\n\r\n画面が戻らないとき\r\nゲーム用PCで「元の画面構成へ復旧」。映像が出ない場合は、\r\nモニター本体でDisplayPort入力を選んでください。\r\n各アプリのウィンドウを元の位置へ並べ直す機能はありません。",11,false),0,0);
         helpLayout.Controls.Add(TextLabel("詳しい操作記録（エラーの内容はここで確認できます）",10,true),0,1);
         log.Multiline=true;log.ReadOnly=true;log.Dock=DockStyle.Fill;log.ScrollBars=ScrollBars.Vertical;log.BackColor=Color.White;log.BorderStyle=BorderStyle.FixedSingle;helpLayout.Controls.Add(log,0,2);
+        BuildAudioTab();
     }
     Control MonitorCard(string title,Label description) {
         var card=Stack(44,-1);card.BackColor=Color.White;card.Padding=new Padding(16,8,16,12);card.Margin=new Padding(0,0,10,0);
@@ -94,7 +95,7 @@ public partial class MainForm {
         nextStep.Text=!game?"押すと：ゲーム用PCに連絡 → 元の画面構成へ復元 → DisplayPortへ切替要求":pending?"押すと：保存した画面構成へ復元 → DisplayPortへ切替要求":"押すと：ウィンドウをサブへ移動 → USB-Cへ切替要求 → 45インチの出力を停止";
         status.ForeColor=Ink;
         if(game && !pending && Configured() && !MonitorsAvailable()){status.Text="モニターの接続を確認してください";statusDetail.Text="「設定」でモニターを再検出し、切替先と移動先を確認してください。";main.Text="設定を確認する  →";}
-        resultLabel.Text=string.IsNullOrEmpty(lastResult)?"表示はアプリの記録に基づきます。実際に映像が切り替わったかは画面で確認してください。":lastResult;
+        resultLabel.Text=AudioSummary()+"\r\n"+(string.IsNullOrEmpty(lastResult)?"映像が切り替わったかは、実際の画面で確認してください。":lastResult);
         if(Preview && PreviewScenario=="error")homeError="ゲーム用PCに接続できません。アプリが起動しているか確認してください。";
         if(!string.IsNullOrEmpty(homeError)){status.Text="操作を完了できませんでした";status.ForeColor=Color.FromArgb(165,63,33);statusDetail.Text=!game?"ゲーム用PCの起動と、同じネットワークへの接続を確認してください。":pending?"画面が戻らない場合は「元の画面構成へ復旧」を押してください。":"「設定」でモニターと接続先を確認してください。";resultLabel.Text=homeError+"\r\n詳しくは「使い方・ログ」で確認できます。";}
     }
@@ -105,7 +106,7 @@ public partial class MainForm {
         Displays.Put(lg.Mode,172,5120);Displays.Put(lg.Mode,176,2160);Displays.Put(sub.Mode,172,2560);Displays.Put(sub.Mode,176,1440);Displays.Put(sub.Mode,76,5120);return new List<MonitorInfo>{lg,sub};
     }
     public static void PreparePreview() {
-        var c=new Settings {Role=PreviewScenario=="work"?"work":"game",Host="GAME-PC",Target="DISPLAY1",TargetIdentity="demo-lg",Fallback="DISPLAY2",FallbackIdentity="demo-sub",AmdTarget=new AdlTarget {Name="LG ULTRAGEAR+",Device="DISPLAY1",Identity="demo-lg"}};c.SetKey(Wire.Random());
+        var c=new Settings {Role=PreviewScenario=="work"?"work":"game",Host="GAME-PC",Target="DISPLAY1",TargetIdentity="demo-lg",Fallback="DISPLAY2",FallbackIdentity="demo-sub",AudioFollowMonitor=true,HandoffAudioId="demo-audio-sub",AmdTarget=new AdlTarget {Name="LG ULTRAGEAR+",Device="DISPLAY1",Identity="demo-lg"}};c.SetKey(Wire.Random());
         if(PreviewScenario=="setup"){c.TargetIdentity=null;c.FallbackIdentity=null;c.AmdTarget=null;}
         Files.Save("settings.json",c);
         if(PreviewScenario=="loan" || PreviewScenario=="recovery")Files.Save("restore.json",new SavedState {Stage=PreviewScenario=="loan"?"work":"preparing",Monitors=DemoMonitors(),Target=c.AmdTarget});

@@ -15,6 +15,21 @@ static class Program {
     public static EventWaitHandle ShowEvent, GiveEvent, ReturnEvent;
     [STAThread] static int Main(string[] args) {
         SetProcessDPIAware();
+        if(args.Contains("--audio-diagnose")) {
+            try {var audio=new WindowsAudio();File.WriteAllText(args.Last(),Files.Json.Serialize(new {Outputs=audio.List(),Defaults=audio.Capture(true)}),System.Text.Encoding.UTF8);return 0;}
+            catch(Exception e){File.WriteAllText(args.Last(),e.ToString());return 1;}
+        }
+        if(args.Contains("--audio-test")) {
+            try {
+                var audio=new WindowsAudio();var before=audio.Capture(false);var path=args.Last();
+                File.WriteAllText(path+".before.json",Files.Json.Serialize(before),System.Text.Encoding.UTF8);
+                AudioDefaults during=null;
+                try {audio.Select(args[1],false);during=audio.Capture(false);Thread.Sleep(200);}
+                finally {audio.Restore(before);}
+                var after=audio.Capture(false);
+                File.WriteAllText(path,Files.Json.Serialize(new {Before=before,During=during,After=after}),System.Text.Encoding.UTF8);return 0;
+            }catch(Exception e){File.WriteAllText(args.Last(),e.ToString());return 1;}
+        }
         if(args.Contains("--self-test")) {try {Tests.Run(args.Last());return 0;} catch(Exception e) {File.WriteAllText(args.Last(),e.ToString());return 1;}}
         if(args.Contains("--diagnose")) {
             try {
@@ -102,6 +117,7 @@ public partial class MainForm : Form {
         RenderHome();
         if(PreviewScenario=="settings")pages.SelectedIndex=1;
         if(PreviewScenario=="help")pages.SelectedIndex=2;
+        if(PreviewScenario=="audio")pages.SelectedIndex=3;
     }
     void AddSetting(TableLayoutPanel p,int row,string label,Control control) {p.RowStyles.Add(new RowStyle(SizeType.Percent,100f/6));p.Controls.Add(new Label {Text=label,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft},0,row);p.Controls.Add(control,1,row);}
     void AddButton(string title,Action action) {var b=new Button {Text=title,AutoSize=true,Height=33,FlatStyle=FlatStyle.System};b.Click+=(s,e)=>{try {action();}catch(Exception error){Append(error.Message);MessageBox.Show(this,error.Message,"設定を確認してください");}};actions.Controls.Add(b);}
@@ -148,7 +164,7 @@ public partial class MainForm : Form {
             config.Target=t.Device;config.Fallback=f.Device;config.TargetIdentity=t.Identity;config.FallbackIdentity=f.Identity;config.AmdTarget=a;
         }
         if(string.IsNullOrWhiteSpace(host.Text))throw new Exception("ゲーム用PCのIPアドレスまたは名前を入力してください。");
-        config.Role=game?"game":"work";config.Host=host.Text.Trim();config.Port=(int)port.Value;Files.Save("settings.json",config);StartServer();Append("設定を保存しました。");homeError=null;RenderHome();pages.SelectedIndex=0;
+        config.Role=game?"game":"work";config.Host=host.Text.Trim();config.Port=(int)port.Value;Files.Save("settings.json",config);StartServer();Append("設定を保存しました。");homeError=null;RefreshAudio();RenderHome();pages.SelectedIndex=0;
     }
     void StartServer() {
         if(Preview){network.Text="接続先: GAME-PC   /   ポート 45845";return;}
@@ -168,7 +184,7 @@ public partial class MainForm : Form {
             busy=true;main.Enabled=false;actions.Enabled=false;status.Text="仕事用PCからの返却要求を処理中…";
             try {var result=await Task.Run(()=>controller.Restore());Append(result);status.Text=controller.Status;homeError=null;completion.SetResult(result);}
             catch(Exception e){Append(e.Message);homeError=e.Message;status.Text="復旧できませんでした • ログを確認してください";completion.SetException(e);}
-            finally {busy=false;main.Enabled=true;actions.Enabled=true;Scan();RenderHome();}
+            finally {busy=false;main.Enabled=true;actions.Enabled=true;Scan();RefreshAudio();RenderHome();}
         }));
         return completion.Task.GetAwaiter().GetResult();
     }
@@ -185,7 +201,7 @@ public partial class MainForm : Form {
         if(busy)return;busy=true;main.Enabled=false;actions.Enabled=false;homeError=null;status.Text=progress;statusDetail.Text="完了するまで、そのままお待ちください。";
         try {var result=await Task.Run(action);Append(result);lastResult=result;}
         catch(Exception e){Append(e.Message);homeError=e.Message;ShowApp();pages.SelectedIndex=0;}
-        finally {busy=false;main.Enabled=true;actions.Enabled=true;if(config.Role=="game")Scan();RenderHome();}
+        finally {busy=false;main.Enabled=true;actions.Enabled=true;if(config.Role=="game")Scan();RefreshAudio();RenderHome();}
     }
     void Export() {
         if(config.Role!="game" || server==null)throw new Exception("ゲーム用PCの設定を保存してください。");
@@ -201,7 +217,7 @@ public partial class MainForm : Form {
             var p=Files.Json.Deserialize<Pairing>(File.ReadAllText(dialog.FileName));
             if(p.Format!="DisplayHandoff/1" || Convert.FromBase64String(p.Key).Length!=32 || string.IsNullOrWhiteSpace(p.Host) || p.Port<1024 || p.Port>65535)throw new Exception("ペアリングファイルが不正です。");
             config.SetKey(p.Key);config.Role="work";config.Host=p.Host;config.Port=p.Port;role.SelectedIndex=1;host.Text=p.Host;port.Value=p.Port;
-            Files.Save("settings.json",config);StartServer();Append("仕事用PCとして登録しました。「接続を確認」を押してください。");RenderHome();
+            Files.Save("settings.json",config);StartServer();Append("仕事用PCとして登録しました。「接続を確認」を押してください。");RefreshAudio();RenderHome();
         }
     }
     void Shortcut(bool startup) {

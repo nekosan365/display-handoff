@@ -17,6 +17,17 @@ static class Tests {
         public void Switch(AdlTarget t,byte input){Hit(input==0xd1?"usb":"dp");}
     }
     static int count;
+    class FakeAudio : IAudioRouting {
+        public string Fail="";
+        public AudioDefaults Current=new AudioDefaults {Console="audio-console",Multimedia="audio-media",Communications="audio-call"};
+        public List<string> Events;
+        public FakeAudio(List<string> events){Events=events;}
+        public List<AudioOutput> List(){return new[]{"audio-console","audio-media","audio-call","audio-sub"}.Select(id=>new AudioOutput {Id=id,Name=id}).ToList();}
+        public void Validate(string id){if(!List().Any(d=>d.Id==id))throw new Exception("missing audio endpoint");}
+        public AudioDefaults Capture(bool calls){return new AudioDefaults {Console=Current.Console,Multimedia=Current.Multimedia,Communications=Current.Communications,IncludeCommunications=calls};}
+        public void Select(string id,bool calls){Events.Add("audio-select");Current.Console=id;if(Fail=="select")throw new Exception("injected partial audio switch");Current.Multimedia=id;if(calls)Current.Communications=id;}
+        public void Restore(AudioDefaults saved){Events.Add("audio-restore");if(Fail=="restore")throw new Exception("injected audio restore");Current.Console=saved.Console;Current.Multimedia=saved.Multimedia;if(saved.IncludeCommunications)Current.Communications=saved.Communications;}
+    }
     static void Assert(bool ok,string message){if(!ok)throw new Exception("FAIL: "+message);count++;}
     static void Throws(Action action,string message){bool threw=false;try{action();}catch{threw=true;}Assert(threw,message);}
     public static void Run(string output) {
@@ -95,6 +106,27 @@ static class Tests {
             Assert(engine.Status.Contains("未完了") && !engine.Status.Contains("貸出中"),"preparing state is not misreported as loaned");
             engine.Restore();Assert(!engine.Pending && File.Exists(Files.PathFor("last-restored.json")),"legacy recovery keeps an archived snapshot and clears pending state");
             byte[] packet=Amd.Packet(0xd1);Assert(BitConverter.ToString(packet)=="6E-50-84-03-F4-00-D1-9C","USB-C vendor payload");Assert(Amd.Packet(0xd0)[7]==0x9d,"DP checksum");
+            c.AudioFollowMonitor=true;c.HandoffAudioId="audio-sub";h.Calls.Clear();
+            var sound=new FakeAudio(h.Calls);var withAudio=new Controller(c,h,sound);
+            withAudio.Give();
+            Assert(string.Join(",",h.Calls)=="audio-select,move,usb,detach","audio changes before monitor handoff");
+            Assert(AudioDefaults.IsSelected(sound.Capture(false),"audio-sub"),"handoff routes ordinary audio to selected endpoint");
+            Assert(sound.Current.Communications=="audio-call","communication audio remains unchanged by default");
+            var capturedAudio=Files.Read<SavedState>("restore.json").AudioBefore;
+            Assert(capturedAudio.Console=="audio-console" && capturedAudio.Multimedia=="audio-media","persist per-role originals before switching");
+            new Controller(c,h,sound).Restore();
+            Assert(sound.Current.Console=="audio-console" && sound.Current.Multimedia=="audio-media","restore exact pre-handoff per-role outputs after restart");
+            Assert(string.Join(",",h.Calls).EndsWith("restore,dp,audio-restore"),"restore display before DP audio endpoint");
+            sound.Fail="select";h.Calls.Clear();Throws(()=>withAudio.Give(),"partial audio selection failure");
+            Assert(!h.Calls.Contains("move") && sound.Current.Console=="audio-console" && !withAudio.Pending,"partial audio selection rolls back without moving windows");sound.Fail="";
+            c.HandoffAudioId="unplugged";h.Calls.Clear();Throws(()=>withAudio.Give(),"unplugged audio preflight");Assert(h.Calls.Count==0 && !withAudio.Pending,"missing audio does not disable display or create recovery state");c.HandoffAudioId="audio-sub";
+            withAudio.Give();sound.Fail="restore";Throws(()=>withAudio.Restore(),"audio restoration failure");
+            Assert(withAudio.Pending && Files.Read<SavedState>("restore.json").Stage=="audio-restore","retain recovery data after display restored but audio failed");
+            sound.Fail="";withAudio.Restore();Assert(!withAudio.Pending,"audio restoration can be retried");
+            withAudio.Give();h.Fail="dp";Throws(()=>withAudio.Restore(),"DP failure still attempts audio recovery");
+            Assert(sound.Current.Multimedia=="audio-media" && withAudio.Pending,"audio restored even when monitor command fails");h.Fail="";withAudio.Restore();
+            c.AudioIncludeCommunications=true;withAudio.Give();Assert(sound.Current.Communications=="audio-sub","opt-in communication routing");withAudio.Restore();Assert(sound.Current.Communications=="audio-call","restore communication routing independently");
+            c.AudioFollowMonitor=false;c.AudioIncludeCommunications=false;
             int executed=0;
             using(var server=new Server(0,c.Key,command=>{executed++;return command=="status"?"ready":"returned";})) {
                 c.Port=server.Port;Assert(Wire.Call(c,"status")=="ready","authenticated status");Assert(Wire.Call(c,"return")=="returned","authenticated return");
